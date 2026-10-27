@@ -1,15 +1,16 @@
 from fastapi import APIRouter, Depends
-from app.api.v1 import auth, users, cases
+from app.api.v1 import auth, users, cases, education
 from app.schemas.auth import CurrentUserResponse
 from app.models.user import User
 from app.api.dependencies import get_current_user
 
 api_router = APIRouter()
 
-# Mount authentication, user profile, and screening case routers
+# Mount authentication, user profile, screening cases, and education routers
 api_router.include_router(auth.router)
 api_router.include_router(users.router)
 api_router.include_router(cases.router)
+api_router.include_router(education.router)
 
 
 @api_router.get("/me", response_model=CurrentUserResponse, tags=["Authentication"])
