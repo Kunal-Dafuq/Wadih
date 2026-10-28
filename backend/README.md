@@ -48,6 +48,7 @@ The Wadih engineering team operates under strict modular responsibility isolatio
   - Dual confirmed carriers: 25% affected, 50% carrier, 25% non-carrier per pregnancy.
   - Single carrier + negative partner: Server-controlled clinical provenance modeling (`P(affected) = r × 1/4`).
   - Zero Client-Side Provenance Trust: Client booleans or free-text source names cannot self-certify clinical provenance; residual risk must be verified against an authoritative `ClinicalResidualRiskRecord` signed off by an authorized clinician.
+  - Case-Level & Couple-Referral Authorization: Ingestion (`/api/v1/clinical/provenance`) requires counsellors to be assigned to the case directly or hold an active referral for a partner participant who has an active `ConsentGrant` with the case owner. Unassigned counsellors fail closed with 403 Forbidden.
   - Strict clinical safety guardrails: Suppresses numerical probabilities (`INSUFFICIENT_DATA` / `REVIEW_REQUIRED` with `risk_estimate=null`) when residual risk `r` or provenance is unverified. Rejects zero-risk claims for negative screening panels (`EDUCATIONAL_RESULT` with `risk_estimate=null`).
   - Clinician-reviewed and sufficient-findings validation gates.
   - Automatic escalation triggers for VUS, unreviewed data, and affected phenotypes.

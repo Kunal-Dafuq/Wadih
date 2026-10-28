@@ -136,7 +136,11 @@ Evaluates reproductive risk directly from stored screening findings using a vali
 #### `POST /api/v1/clinical/provenance` *(Clinician / Admin Only)*
 Records an authoritative, clinician-reviewed residual-risk assessment for a negative-screening case finding.
 
-- **Auth Required:** Yes (`role` must be `COUNSELLOR` or `ADMIN`; patients receive `403 FORBIDDEN`)
+- **Auth Required:** Yes (`role` must be `COUNSELLOR` or `ADMIN`; patients receive `403 FORBIDDEN`).
+- **Object-Level Authorization Rules for Counsellors:**
+  - An authenticated, active `COUNSELLOR` must be assigned to manage the target screening case directly (via `ReferralTask`), OR be assigned to an active referral for a partner participant who holds an active, unrevoked, unexpired `ConsentGrant` with the target case owner.
+  - Unassigned counsellors or counsellors lacking an authorized couple relationship receive `403 FORBIDDEN`.
+  - Administrative accounts (`ADMIN`) retain documented operational ingestion authority.
 - **Request Body (`ClinicalProvenanceCreateRequest`):**
 ```json
 {
