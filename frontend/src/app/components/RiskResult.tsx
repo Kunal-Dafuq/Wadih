@@ -211,6 +211,12 @@ export function RiskResult({ assessment: a, caseId, joint, readOnly }: RiskResul
         <section>
           <h4 className="mini-title">What this means</h4>
           <Paragraphs text={a.explanation} />
+          {/* The only reviewed inheritance content the API serves is for autosomal recessive conditions. */}
+          {caseId != null && !readOnly && a.inheritance_pattern === 'AUTOSOMAL_RECESSIVE' && (
+            <Link to={`/app/results/${caseId}/learn`} className="text-link small">
+              How autosomal recessive inheritance works, and check your understanding
+            </Link>
+          )}
         </section>
 
         {a.residual_risk_source && (

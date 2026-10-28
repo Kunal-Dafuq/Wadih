@@ -5,25 +5,51 @@ import { Link } from '../../lib/router';
 import { useAsync } from '../../lib/useAsync';
 import type { ConsentGrant, RiskAssessment, SyntheticFinding } from '../../lib/types';
 import { RiskResult } from '../components/RiskResult';
-import { carrierLabel, carrierTone, inheritanceLabel, triggerLabel } from '../labels';
+import { carrierLabel, carrierTone, effectiveConsentStatus, inheritanceLabel, triggerLabel } from '../labels';
 import { Badge, Banner, Button, ErrorNote, Field, Loading, PageHeader, Panel } from '../ui';
 
-/** Partner cases the caller can include: active grants *to* the caller that are bound to a case. */
+/** Partner cases the caller can include: unexpired, granted consents *to* the caller that are bound to a case. */
 function linkedPartnerCases(grants: ConsentGrant[], myId: number) {
-  return grants.filter((g) => g.grantee_user_id === myId && g.status === 'GRANTED' && g.case_id != null);
+  const byCase = new Map<number, ConsentGrant>();
+  for (const g of grants) {
+    if (g.grantee_user_id !== myId || effectiveConsentStatus(g) !== 'GRANTED' || g.case_id == null) continue;
+    // One entry per shared record; keep the grant that lasts longest (no expiry counts as longest).
+    const prev = byCase.get(g.case_id);
+    const lasts = (x: ConsentGrant) => (x.expires_at ? Date.parse(x.expires_at) : Infinity);
+    if (!prev || lasts(g) > lasts(prev)) byCase.set(g.case_id, g);
+  }
+  return [...byCase.values()];
 }
 
 function FindingAssessment({ caseId, finding, partners }: { caseId: number; finding: SyntheticFinding; partners: ConsentGrant[] }) {
   const [partnerCaseId, setPartnerCaseId] = useState<string>('');
   const [result, setResult] = useState<{ data: RiskAssessment; joint: boolean } | null>(null);
+  const [notScreened, setNotScreened] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
 
   const run = async () => {
     setPending(true);
     setError(null);
+    setNotScreened(null);
     const partner = partnerCaseId ? Number(partnerCaseId) : null;
     try {
+      if (partner != null) {
+        // The grant may have expired since the page loaded; the risk engine itself does not check expiry.
+        const grant = partners.find((g) => g.case_id === partner);
+        if (!grant || effectiveConsentStatus(grant) !== 'GRANTED') {
+          throw new ApiError(403, 'CONSENT_REQUIRED', 'Your partner’s consent for this record is no longer active.');
+        }
+        // Re-read the partner's record on every run (not cached), so the server re-checks consent,
+        // revocation and expiry. The engine also treats a condition missing from the partner's record
+        // as a negative screen, so confirm the partner was actually screened for it.
+        const shared = await api.getSharedCase(partner);
+        if (!shared.findings.some((f) => f.condition_code === finding.condition_code)) {
+          setResult(null);
+          setNotScreened(shared.owner_display_name);
+          return;
+        }
+      }
       const data = await api.assessCase(caseId, { condition_code: finding.condition_code, partner_case_id: partner });
       setResult({ data, joint: partner != null });
     } catch (e) {
@@ -68,6 +94,14 @@ function FindingAssessment({ caseId, finding, partners }: { caseId: number; find
         </Button>
       </div>
 
+      {notScreened && (
+        <Banner tone="info" title="A joint assessment isn’t possible for this condition">
+          <p>
+            {notScreened}’s shared record doesn’t include a {finding.condition_name} result, so a couple-level assessment
+            would not be meaningful. Partner screening for this condition would be needed first.
+          </p>
+        </Banner>
+      )}
       {error && <ErrorNote error={error} />}
       {error?.code === 'CONSENT_REQUIRED' && (
         <p className="muted small">

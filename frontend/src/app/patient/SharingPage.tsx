@@ -4,7 +4,7 @@ import { useAuth } from '../../lib/auth';
 import { Link } from '../../lib/router';
 import { useAction, useAsync } from '../../lib/useAsync';
 import type { ConsentGrant, ConsentScope } from '../../lib/types';
-import { consentTone, formatDate, scopeDetail, scopeLabel, statusLabel } from '../labels';
+import { consentTone, effectiveConsentStatus, formatDate, scopeDetail, scopeLabel, statusLabel } from '../labels';
 import { Badge, Banner, Button, Empty, ErrorNote, Field, Loading, PageHeader, Panel } from '../ui';
 
 const SCOPES: ConsentScope[] = ['carrier_status_only', 'summary_only', 'full_report'];
@@ -127,7 +127,8 @@ function GrantRow({ g, outgoing, onChange }: { g: ConsentGrant; outgoing: boolea
   const approve = useAction(() => api.approveConsent(g.id));
   const revoke = useAction(() => api.revokeConsent(g.id));
   const [confirmRevoke, setConfirmRevoke] = useState(false);
-  const live = g.status === 'PENDING' || g.status === 'GRANTED';
+  const status = effectiveConsentStatus(g);
+  const live = status === 'PENDING' || status === 'GRANTED';
 
   return (
     <li className="grant">
@@ -137,15 +138,20 @@ function GrantRow({ g, outgoing, onChange }: { g: ConsentGrant; outgoing: boolea
           <p className="muted small">
             {scopeLabel(g.scope)}
             {g.case_id != null && <> · record #{g.case_id}</>} · created {formatDate(g.created_at)}
-            {g.expires_at && <> · expires {formatDate(g.expires_at)}</>}
+            {g.expires_at && (
+              <>
+                {' '}
+                · {status === 'EXPIRED' ? 'expired' : 'expires'} {formatDate(g.expires_at)}
+              </>
+            )}
             {g.revoked_at && <> · revoked {formatDate(g.revoked_at)}</>}
           </p>
         </div>
-        <Badge tone={consentTone(g.status)}>{statusLabel(g.status)}</Badge>
+        <Badge tone={consentTone(status)}>{statusLabel(status)}</Badge>
       </div>
 
       <div className="grant-actions">
-        {outgoing && g.status === 'PENDING' && (
+        {outgoing && status === 'PENDING' && (
           <Button size="sm" pending={approve.pending} onClick={async () => (await approve.run()) && onChange()}>
             Confirm sharing
           </Button>
@@ -176,12 +182,12 @@ function GrantRow({ g, outgoing, onChange }: { g: ConsentGrant; outgoing: boolea
             </Button>
           </span>
         )}
-        {!outgoing && g.status === 'GRANTED' && g.case_id != null && (
+        {!outgoing && status === 'GRANTED' && g.case_id != null && (
           <Link to={`/app/shared/${g.case_id}`} className="btn btn-ghost btn-sm">
             View shared results
           </Link>
         )}
-        {!outgoing && g.status === 'PENDING' && (
+        {!outgoing && status === 'PENDING' && (
           <span className="muted small">Waiting for {g.granter_name} to confirm.</span>
         )}
       </div>
@@ -259,7 +265,7 @@ export function SharingPage() {
                     ))}
                   </ul>
                 )}
-                {incoming.some((g) => g.status === 'GRANTED' && g.case_id != null) && (
+                {incoming.some((g) => effectiveConsentStatus(g) === 'GRANTED' && g.case_id != null) && (
                   <p className="muted small panel-foot">
                     Open one of your <Link to="/app/results" className="text-link">results</Link> and choose your partner
                     under “Assess with” to see a joint assessment.

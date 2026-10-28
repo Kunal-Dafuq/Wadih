@@ -101,10 +101,23 @@ export function escalationTriggerFor(referralReason: string | null) {
   }
 }
 
+/** Parses backend timestamps, which are UTC but sometimes sent without a zone suffix. */
+export function parseUtc(iso: string) {
+  return new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
+}
+
+/**
+ * The backend only flips a grant to EXPIRED when a shared record is read, so a
+ * GRANTED grant past its `expires_at` is treated as expired in the UI.
+ */
+export function effectiveConsentStatus(g: { status: string; expires_at: string | null }) {
+  if (g.status === 'GRANTED' && g.expires_at && parseUtc(g.expires_at).getTime() <= Date.now()) return 'EXPIRED';
+  return g.status;
+}
+
 export function formatDate(iso: string | null | undefined) {
   if (!iso) return '—';
-  // Backend timestamps without a zone are UTC.
-  const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
+  const d = parseUtc(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
