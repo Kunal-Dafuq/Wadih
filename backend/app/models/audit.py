@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, DateTime, Text
+from sqlalchemy import Column, Integer, String, DateTime, Text, event
 
 from app.db.base import Base
 
@@ -20,3 +20,16 @@ class AuditLog(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+
+@event.listens_for(AuditLog, "before_update")
+def _prevent_audit_log_update(mapper, connection, target):
+    """Enforce ORM-level immutability: Audit records must never be updated."""
+    raise RuntimeError("AuditLog records are append-only and immutable. Updates are strictly prohibited.")
+
+
+@event.listens_for(AuditLog, "before_delete")
+def _prevent_audit_log_delete(mapper, connection, target):
+    """Enforce ORM-level immutability: Audit records must never be deleted."""
+    raise RuntimeError("AuditLog records are append-only and immutable. Deletions are strictly prohibited.")
+

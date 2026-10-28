@@ -108,17 +108,13 @@ class AuditService:
             )
             assigned_case_ids = [str(r.case_id) for r in referrals if r.case_id]
             assigned_referral_ids = [str(r.id) for r in referrals]
-            assigned_participant_ids = [
-                r.participant_user_id for r in referrals if r.participant_user_id
-            ]
 
+            # Restricted strictly to authorized case/referral scope and counsellor's own actions.
+            # CRITICAL SECURITY RULE: A counsellor CANNOT retrieve events for unrelated cases or
+            # activities merely because the event actor is a participant assigned to that counsellor.
             counsellor_scope_conditions = [
                 AuditLog.actor_user_id == current_user.id,
             ]
-            if assigned_participant_ids:
-                counsellor_scope_conditions.append(
-                    AuditLog.actor_user_id.in_(assigned_participant_ids)
-                )
             if assigned_case_ids:
                 counsellor_scope_conditions.append(
                     and_(

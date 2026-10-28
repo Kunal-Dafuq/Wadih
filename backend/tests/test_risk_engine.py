@@ -405,12 +405,84 @@ def test_api_risk_cases_with_and_without_partner_consent(client: TestClient, db_
     assert resp_consented_no_r.json()["assessment_status"] == "INSUFFICIENT_DATA"
     assert resp_consented_no_r.json()["risk_estimate"] is None
 
-    # Now assess with partner Case 2 WITH validated residual risk r = 0.01:
-    resp_consented_with_r = client.get(
+    # Now assess with partner Case 2 WITH residual risk r = 0.01 BUT unconfirmed provenance -> REVIEW_REQUIRED
+    resp_consented_unprovenanced = client.get(
         "/api/v1/risk/cases/1?condition_code=HBB_BETA_THAL&partner_case_id=2&partner_residual_carrier_probability=0.01",
+        headers=headers_a,
+    )
+    assert resp_consented_unprovenanced.status_code == 200
+    data_unprov = resp_consented_unprovenanced.json()
+    assert data_unprov["assessment_status"] == "REVIEW_REQUIRED"
+    assert data_unprov["referral_reason"] == "UNVERIFIED_RESIDUAL_RISK_PROVENANCE"
+    assert data_unprov["risk_estimate"] is None
+
+    # Now assess with partner Case 2 WITH confirmed clinician provenance via GET legacy:
+    resp_consented_with_r = client.get(
+        "/api/v1/risk/cases/1?condition_code=HBB_BETA_THAL&partner_case_id=2&partner_residual_carrier_probability=0.01&clinician_confirmed_provenance=true",
         headers=headers_a,
     )
     assert resp_consented_with_r.status_code == 200
     data_with_r = resp_consented_with_r.json()
     assert data_with_r["assessment_status"] == "EDUCATIONAL_RESULT"
     assert data_with_r["risk_estimate"]["affected_probability"] == 0.0025
+
+
+def test_secure_post_risk_assessment_endpoint_and_provenance(client: TestClient, db_session: Session):
+    """API Security: Moving risk inputs to POST body prevents URL log leakage and enforces provenance."""
+    seed_database(db_session)
+
+    login_a = client.post(
+        "/api/v1/auth/login",
+        json={"email": "patient.a@wadih.demo", "password": DEMO_PASSWORD},
+    )
+    headers_a = {"Authorization": f"Bearer {login_a.json()['access_token']}"}
+
+    # Grant consent from Patient B to Patient A
+    grant = ConsentGrant(
+        granter_user_id=2,
+        grantee_user_id=1,
+        scope=ConsentScope.SUMMARY_ONLY.value,
+        status=ConsentStatus.GRANTED.value,
+        purpose="preconception_carrier_screening",
+    )
+    db_session.add(grant)
+    db_session.commit()
+
+    # 1. Unconfirmed provenance via POST body -> REVIEW_REQUIRED
+    post_unprov_payload = {
+        "condition_code": "HBB_BETA_THAL",
+        "partner_case_id": 2,
+        "partner_residual_carrier_probability": 0.01,
+        "clinician_confirmed_provenance": False,
+    }
+    resp_post_unprov = client.post(
+        "/api/v1/risk/cases/1/assess",
+        json=post_unprov_payload,
+        headers=headers_a,
+    )
+    assert resp_post_unprov.status_code == 200
+    res_unprov = resp_post_unprov.json()
+    assert res_unprov["assessment_status"] == "REVIEW_REQUIRED"
+    assert res_unprov["referral_reason"] == "UNVERIFIED_RESIDUAL_RISK_PROVENANCE"
+    assert res_unprov["risk_estimate"] is None
+
+    # 2. Confirmed provenance via POST body -> EDUCATIONAL_RESULT with 0.0025
+    post_prov_payload = {
+        "condition_code": "HBB_BETA_THAL",
+        "partner_case_id": 2,
+        "partner_residual_carrier_probability": 0.01,
+        "residual_risk_source": "Accredited Lab Carrier Panel (99% detection rate)",
+        "clinician_confirmed_provenance": True,
+    }
+    resp_post_prov = client.post(
+        "/api/v1/risk/cases/1/assess",
+        json=post_prov_payload,
+        headers=headers_a,
+    )
+    assert resp_post_prov.status_code == 200
+    res_prov = resp_post_prov.json()
+    assert res_prov["assessment_status"] == "EDUCATIONAL_RESULT"
+    assert res_prov["risk_estimate"]["affected_probability"] == 0.0025
+    assert res_prov["residual_risk_source"] == "Accredited Lab Carrier Panel (99% detection rate)"
+    assert any("Accredited Lab Carrier Panel" in a for a in res_prov["assumptions"])
+

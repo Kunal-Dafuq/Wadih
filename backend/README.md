@@ -54,9 +54,10 @@ The Wadih engineering team operates under strict modular responsibility isolatio
   - Scopes: `carrier_status_only` (field-level redaction), `summary_only`, `full_report`.
   - Transactionally atomic consent grant, approve, and revoke operations with immediate access denial upon revocation or expiration.
   - Direct case details (`/api/v1/cases/{case_id}`) guarded by IDOR checks, permitting cross-account access only under explicit active `full_report` consent.
-- Least-privilege security audit logging & sanitization:
+- Least-privilege security audit logging & immutability:
   - Automatic credential and genomic sequence sanitization (raw variant strings, passwords, tokens redacted).
-  - Role-based scoping: Counsellors restricted strictly to assigned cases, referrals, or participants; Patients forbidden (403); Admins retain full audit visibility.
+  - Role-based scoping: Counsellors restricted strictly to assigned cases, referrals, or their own actions. Unrelated cases or general account actions performed by assigned participants are strictly filtered out. Patients forbidden (403); Admins retain full audit visibility.
+  - Immutability: Application & ORM layer strictly prohibits updates and deletions via SQLAlchemy event listeners; zero modification API routes exposed. (Physical database immutability against direct SQL superusers requires database-level privilege revocation or cloud WORM sinks).
   - Atomic transaction commits ensuring business state changes and audit records persist or roll back together.
 
 ### Saiesha's Frontend Interfaces
@@ -110,7 +111,8 @@ Supported error codes:
 | `PATCH` | `/api/v1/referrals/{referral_id}/status` | Yes | Update status (PENDING, SCHEDULED, COMPLETED, CANCELLED) |
 | `POST` | `/api/v1/referrals/{referral_id}/notes` | Yes (Counsellor) | Author clinical/counselling session note |
 | `POST` | `/api/v1/risk/assess` | Yes | Calculate deterministic Mendelian recurrence risk |
-| `GET` | `/api/v1/risk/cases/{case_id}` | Yes | Risk calculation from stored case (enforcing partner consent) |
+| `POST` | `/api/v1/risk/cases/{case_id}/assess` | Yes | Secure risk calculation via POST body (prevents log leakage; requires provenance) |
+| `GET` | `/api/v1/risk/cases/{case_id}` | Yes | Legacy risk calculation from stored case (deprecated) |
 | `POST` | `/api/v1/consents` | Yes | Create granular consent grant (carrier_status_only, summary_only, full_report) |
 | `GET` | `/api/v1/consents` | Yes | List active and historical consent grants for user |
 | `GET` | `/api/v1/consents/{consent_id}` | Yes | Consent grant detail (granter/grantee restricted) |

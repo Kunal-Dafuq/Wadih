@@ -102,8 +102,10 @@ def test_consent_grant_and_revoke_logged_in_audit(client: TestClient, db_session
 
 
 def test_counsellor_least_privilege_audit_scoping(client: TestClient, db_session: Session):
-    """Least Privilege: Counsellors can only view audit logs for assigned cases/participants.
+    """Least Privilege: Counsellors can only view audit logs for assigned cases and referrals.
 
+    A counsellor MUST NOT retrieve events for unrelated cases or unrelated activities
+    merely because the event actor is a participant assigned to that counsellor.
     Admins have global visibility.
     """
     from app.core.security import hash_password
@@ -119,7 +121,7 @@ def test_counsellor_least_privilege_audit_scoping(client: TestClient, db_session
     db_session.add(admin_user)
     db_session.commit()
 
-    # 1. Log an event for an assigned participant/case (Patient A, Case 1, Referral 1)
+    # 1. Log an event for an assigned participant & assigned case (Patient A, Case 1, Referral 1)
     AuditService.log_event(
         db=db_session,
         action="ASSIGNED_CASE_EVENT",
@@ -130,7 +132,29 @@ def test_counsellor_least_privilege_audit_scoping(client: TestClient, db_session
         details={"note": "Assigned case event"},
     )
 
-    # 2. Log an event for an unassigned patient/case (User 99, Case 99)
+    # 2. Log an event where assigned participant (Patient A, id=1) interacts with an UNASSIGNED case (Case 999)
+    AuditService.log_event(
+        db=db_session,
+        action="UNASSIGNED_CASE_BY_ASSIGNED_PARTICIPANT",
+        resource_type="screening_case",
+        resource_id="999",
+        actor_user_id=1,
+        outcome="SUCCESS",
+        details={"note": "Participant A viewed an unassigned case"},
+    )
+
+    # 3. Log an unrelated activity performed by assigned participant (Patient A, id=1) (e.g. profile edit, password change)
+    AuditService.log_event(
+        db=db_session,
+        action="UNRELATED_ACTIVITY_BY_ASSIGNED_PARTICIPANT",
+        resource_type="user_profile",
+        resource_id="1",
+        actor_user_id=1,
+        outcome="SUCCESS",
+        details={"note": "Participant A updated profile settings"},
+    )
+
+    # 4. Log an event for an entirely unrelated patient and case (User 999, Case 999)
     AuditService.log_event(
         db=db_session,
         action="UNASSIGNED_CASE_EVENT",
@@ -141,7 +165,18 @@ def test_counsellor_least_privilege_audit_scoping(client: TestClient, db_session
         details={"note": "Unassigned case event"},
     )
 
-    # 3. Login as Counsellor (User 3, assigned to Case 1)
+    # 5. Log an event performed by the Counsellor themself (User 3)
+    AuditService.log_event(
+        db=db_session,
+        action="COUNSELLOR_OWN_ACTION",
+        resource_type="counsellor_note",
+        resource_id="1",
+        actor_user_id=3,
+        outcome="SUCCESS",
+        details={"note": "Counsellor created session note"},
+    )
+
+    # Query as Counsellor (User 3, assigned to Case 1)
     login_c = client.post(
         "/api/v1/auth/login",
         json={"email": "counsellor@wadih.demo", "password": DEMO_PASSWORD},
@@ -153,10 +188,18 @@ def test_counsellor_least_privilege_audit_scoping(client: TestClient, db_session
     c_events = counsellor_resp.json()["events"]
     c_actions = [e["action"] for e in c_events]
 
+    # Permitted: Assigned case and counsellor's own action
     assert "ASSIGNED_CASE_EVENT" in c_actions
+    assert "COUNSELLOR_OWN_ACTION" in c_actions
+
+    # Strictly Denied: Unassigned case, even when performed by assigned participant!
+    assert "UNASSIGNED_CASE_BY_ASSIGNED_PARTICIPANT" not in c_actions
+    # Strictly Denied: Unrelated activity, even when performed by assigned participant!
+    assert "UNRELATED_ACTIVITY_BY_ASSIGNED_PARTICIPANT" not in c_actions
+    # Strictly Denied: Completely unassigned event
     assert "UNASSIGNED_CASE_EVENT" not in c_actions
 
-    # 4. Login as Admin (full visibility)
+    # Query as Admin (full platform visibility)
     login_admin = client.post(
         "/api/v1/auth/login",
         json={"email": "admin@wadih.demo", "password": DEMO_PASSWORD},
@@ -169,7 +212,57 @@ def test_counsellor_least_privilege_audit_scoping(client: TestClient, db_session
     admin_actions = [e["action"] for e in admin_events]
 
     assert "ASSIGNED_CASE_EVENT" in admin_actions
+    assert "COUNSELLOR_OWN_ACTION" in admin_actions
+    assert "UNASSIGNED_CASE_BY_ASSIGNED_PARTICIPANT" in admin_actions
+    assert "UNRELATED_ACTIVITY_BY_ASSIGNED_PARTICIPANT" in admin_actions
     assert "UNASSIGNED_CASE_EVENT" in admin_actions
+
+
+def test_audit_log_immutability_blocks_updates_and_deletions(db_session: Session):
+    """Integrity: AuditLog records are append-only. ORM-level event listeners block updates and deletes."""
+    import pytest
+
+    entry1 = AuditService.log_event(
+        db=db_session,
+        action="IMMUTABLE_TEST_EVENT_1",
+        resource_type="screening_case",
+        resource_id="101",
+        actor_user_id=1,
+        outcome="SUCCESS",
+        details={"note": "Initial audit entry 1"},
+        commit=False,
+    )
+    db_session.flush()
+
+    # 1. Attempt to update the audit record -> blocked by ORM listener
+    entry1.action = "TAMPERED_ACTION"
+    with pytest.raises(
+        RuntimeError,
+        match="AuditLog records are append-only and immutable. Updates are strictly prohibited.",
+    ):
+        db_session.flush()
+
+    db_session.rollback()
+
+    # 2. Attempt to delete an audit record -> blocked by ORM listener
+    entry2 = AuditService.log_event(
+        db=db_session,
+        action="IMMUTABLE_TEST_EVENT_2",
+        resource_type="screening_case",
+        resource_id="102",
+        actor_user_id=1,
+        outcome="SUCCESS",
+        details={"note": "Initial audit entry 2"},
+        commit=False,
+    )
+    db_session.flush()
+
+    db_session.delete(entry2)
+    with pytest.raises(
+        RuntimeError,
+        match="AuditLog records are append-only and immutable. Deletions are strictly prohibited.",
+    ):
+        db_session.flush()
 
 
 def test_transactional_atomic_rollback_on_audit_failure(db_session: Session, monkeypatch):

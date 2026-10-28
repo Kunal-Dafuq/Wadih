@@ -97,17 +97,41 @@ Calculates deterministic recurrence risk and explanations for structured partner
 
 ---
 
-#### `GET /api/v1/risk/cases/{case_id}?condition_code=HBB_BETA_THAL&partner_case_id=2&partner_residual_carrier_probability=0.01`
-Calculates risk directly from stored screening cases in the database.
+#### `POST /api/v1/risk/cases/{case_id}/assess` *(Recommended & Privacy-Hardened)*
+Evaluates reproductive risk directly from stored screening findings using a validated request body.
 
-- **Auth Required:** Yes
+- **Auth Required:** Yes (`Bearer <token>`)
+- **Privacy Justification:**
+  Clinical parameters (condition code, partner case ID, residual carrier probabilities) are submitted in the HTTP POST body rather than URL query parameters. This eliminates sensitive health data leakage into reverse-proxy logs (Nginx, ALB), browser histories, and APM logging pipelines.
+- **Request Body (`CaseRiskAssessmentRequest`):**
+```json
+{
+  "condition_code": "HBB_BETA_THAL",
+  "partner_case_id": 2,
+  "partner_residual_carrier_probability": 0.01,
+  "residual_risk_source": "LabCorp Expanded Carrier Screen v3 (99% detection rate)",
+  "clinician_confirmed_provenance": true
+}
+```
+*Clinical Provenance Requirements:*
+- `partner_residual_carrier_probability` (float, optional): Validated residual carrier probability (strictly $0.0 < r < 1.0$) for a partner with `NO_VARIANT_DETECTED`.
+- `clinician_confirmed_provenance` (boolean, default: `false`): Attestation that the supplied residual risk originates from a certified clinician-reviewed laboratory report. If `false` or unverified, syntactic validation alone is **not** accepted as proof, and the engine returns `REVIEW_REQUIRED` (`UNVERIFIED_RESIDUAL_RISK_PROVENANCE`) with `risk_estimate = null`.
+- `residual_risk_source` (string, optional): Description of the accredited laboratory or panel detection rate.
+- **Access Control:**
+  - If `partner_case_id` is supplied, partner must have granted an active `GRANTED` consent grant to the calling user.
+  - Returns `403 CONSENT_REQUIRED` if partner consent is missing, expired, or revoked.
+
+---
+
+#### `GET /api/v1/risk/cases/{case_id}` *(DEPRECATED - Legacy GET Compatibility)*
+- **Status:** **DEPRECATED**. Preserved for backward compatibility with existing GET integrations.
+- **Security Warning:** Query parameters are visible in HTTP access logs and browser histories. Clients should migrate to `POST /api/v1/risk/cases/{case_id}/assess`.
 - **Query Parameters:**
   - `condition_code` (string, required): e.g. `HBB_BETA_THAL`
   - `partner_case_id` (integer, optional): Case ID of partner's screening report.
-  - `partner_residual_carrier_probability` (float, optional): Validated condition-specific residual carrier probability for partner (e.g. `0.01` for 1 in 100).
-- **Access Control:**
-  - If `partner_case_id` is provided, partner must have granted an active `GRANTED` consent grant to the calling user.
-  - Returns `403 CONSENT_REQUIRED` if partner has not approved consent.
+  - `partner_residual_carrier_probability` (float, optional): Residual carrier risk.
+  - `clinician_confirmed_provenance` (boolean, optional, default: `false`): Requires explicit `true` to compute numeric risk.
+  - `residual_risk_source` (string, optional): Panel source documentation.
 
 ---
 
@@ -251,12 +275,19 @@ Creates a simulated counselling referral task for cases with VUS, dual carrier, 
 
 ---
 
-### 2.4 Audit Logging
+### 2.4 Audit Logging & Immutability Guarantees
 
 #### `GET /api/v1/audit/events`
 - **Auth Required:** Yes (`role` must be `ADMIN` or `COUNSELLOR`)
 - **Query Params:** `action`, `resource_type`, `skip`, `limit`
-- **Errors:** Normal participants receive `403 FORBIDDEN`.
+- **Least-Privilege Scoping:**
+  - **Patients**: Denied with `403 FORBIDDEN` (and logged under `PRIVILEGED_ACCESS_ATTEMPT`).
+  - **Counsellors**: Strictly scoped to events belonging to assigned screening cases, assigned referral tasks, or actions performed by the counsellor themself. Unrelated cases or general account actions performed by assigned participants are strictly filtered out.
+  - **Admins**: Full platform audit visibility.
+- **Audit Log Immutability & Boundaries:**
+  - **Application/API Layer:** No endpoints exist to modify, update, or delete audit records.
+  - **ORM Layer:** Enforced via SQLAlchemy lifecycle listeners (`before_update` and `before_delete`) that raise runtime errors if any mutation is attempted.
+  - **Database Storage Reality:** Application-layer enforcement ensures code cannot tamper with audit records. However, true tamper-proofing against physical DBAs, disk writes, or direct SQL execution with superuser privileges requires database-level privilege revocation (`REVOKE UPDATE, DELETE`) or managed cloud WORM storage (e.g. AWS CloudTrail Object Lock or GCP Audit Logs). We do not claim tamper-proof physical storage.
 
 ---
 

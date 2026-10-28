@@ -31,6 +31,8 @@ def evaluate_autosomal_recessive_case(
     partner_2_residual_carrier_probability: Optional[float] = None,
     findings_sufficient: bool = True,
     is_clinician_reviewed: bool = True,
+    clinician_confirmed_provenance: bool = True,
+    residual_risk_source: Optional[str] = None,
 ) -> Tuple[
     AssessmentStatus,
     Optional[RiskProbabilityEstimate],
@@ -208,11 +210,37 @@ def evaluate_autosomal_recessive_case(
                 None,
             )
 
-        # When validated residual risk r is provided (0.0 < r < 1.0):
+        # Safety rule: Syntactic validation alone is NOT proof of clinician-reviewed laboratory provenance!
+        if not clinician_confirmed_provenance:
+            explanation = (
+                f"One partner was confirmed as a carrier for {condition_name}{gene_display}, while the other partner tested negative on the carrier panel. "
+                f"A numerical residual carrier probability ({neg_partner_r}) was submitted, but lacks confirmed laboratory or clinician provenance. "
+                "Syntactic numerical validation alone does not constitute proof that a residual-risk value originates from an accredited, clinician-reviewed laboratory report. "
+                "Under clinical safety guidelines, numerical recurrence probabilities cannot be computed without verified laboratory detection rates and clinician confirmation. "
+                "Consultation with a certified genetic counsellor or laboratory verification is required."
+            )
+            return (
+                AssessmentStatus.REVIEW_REQUIRED,
+                None,
+                explanation,
+                STANDARD_LIMITATIONS
+                + [
+                    "Residual carrier probability lacks confirmed clinician-reviewed laboratory provenance; numerical calculation suppressed.",
+                ],
+                assumptions,
+                True,
+                "UNVERIFIED_RESIDUAL_RISK_PROVENANCE",
+            )
+
+        # When validated residual risk r is provided (0.0 < r < 1.0) with confirmed provenance:
         # P(affected child per pregnancy) = r × 1/4
         # P(carrier child per pregnancy) = 0.50
         # P(unaffected non-carrier child per pregnancy) = 0.50 - 0.25 * r
         r = neg_partner_r
+        if residual_risk_source:
+            assumptions = assumptions + [
+                f"Residual carrier probability (r = {r}) is derived from documented laboratory source: {residual_risk_source}."
+            ]
         affected_prob = round(r * 0.25, 6)
         carrier_prob = 0.50
         unaffected_non_carrier_prob = round(0.50 - 0.25 * r, 6)

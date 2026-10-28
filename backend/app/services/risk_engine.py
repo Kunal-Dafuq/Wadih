@@ -99,6 +99,8 @@ class RiskEngineService:
             partner_2_residual_carrier_probability=request.partner_2_residual_carrier_probability,
             findings_sufficient=request.findings_sufficient,
             is_clinician_reviewed=request.is_clinician_reviewed,
+            clinician_confirmed_provenance=request.clinician_confirmed_provenance,
+            residual_risk_source=request.residual_risk_source,
         )
 
         return RiskAssessmentResponse(
@@ -109,6 +111,7 @@ class RiskEngineService:
             inheritance_pattern=request.inheritance_pattern,
             assessment_status=status,
             risk_estimate=risk_est,
+            residual_risk_source=request.residual_risk_source,
             explanation=explanation,
             limitations=limitations,
             assumptions=assumptions,
@@ -125,6 +128,8 @@ class RiskEngineService:
         user: User,
         partner_case_id: Optional[int] = None,
         partner_residual_carrier_probability: Optional[float] = None,
+        residual_risk_source: Optional[str] = None,
+        clinician_confirmed_provenance: bool = False,
     ) -> RiskAssessmentResponse:
         """Assess risk directly from stored synthetic cases in the database, verifying ownership and consent."""
         # 1. Fetch Primary Case (Case 1)
@@ -191,6 +196,11 @@ class RiskEngineService:
             else:
                 p2_interpretation = ScreeningInterpretation.NO_VARIANT_DETECTED
 
+        # Ensure findings reviewed by clinician for both available partners
+        both_reviewed = bool(finding_1.reviewed_flag)
+        if partner_case_id and finding_2:
+            both_reviewed = both_reviewed and bool(finding_2.reviewed_flag)
+
         req = RiskAssessmentRequest(
             case_id=case_1.synthetic_case_code,
             condition_code=finding_1.condition_code,
@@ -200,8 +210,10 @@ class RiskEngineService:
             partner_1_finding=p1_interpretation,
             partner_2_finding=p2_interpretation,
             partner_2_residual_carrier_probability=partner_residual_carrier_probability,
+            residual_risk_source=residual_risk_source,
+            clinician_confirmed_provenance=clinician_confirmed_provenance,
             findings_sufficient=True,
-            is_clinician_reviewed=finding_1.reviewed_flag,
+            is_clinician_reviewed=both_reviewed,
         )
 
         return RiskEngineService.assess_risk(req)

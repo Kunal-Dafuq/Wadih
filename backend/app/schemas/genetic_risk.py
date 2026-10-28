@@ -71,11 +71,40 @@ class RiskAssessmentRequest(BaseModel):
         None,
         description="Validated condition-specific residual carrier probability (0.0 < r < 1.0) for partner 2 if negative",
     )
+    residual_risk_source: Optional[str] = Field(
+        None,
+        description="Documentation of laboratory panel and detection rate source for residual risk (e.g. 'LabCorp ECS v3 - 99% detection rate')",
+    )
+    clinician_confirmed_provenance: bool = Field(
+        True,
+        description="Whether supplied residual carrier risk is confirmed to originate from a clinician-reviewed laboratory report",
+    )
     findings_sufficient: bool = Field(
         True, description="Whether laboratory findings are sufficient for supported model"
     )
     is_clinician_reviewed: bool = Field(
         True, description="Whether input findings have undergone certified clinician review"
+    )
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CaseRiskAssessmentRequest(BaseModel):
+    condition_code: str = Field(..., description="Machine-readable condition identifier (e.g. HBB_BETA_THAL)")
+    partner_case_id: Optional[int] = Field(
+        None, description="Optional partner case ID (requires active partner consent grant)"
+    )
+    partner_residual_carrier_probability: Optional[float] = Field(
+        None,
+        description="Validated condition-specific residual carrier probability for negative-screening partner (0.0 < r < 1.0)",
+    )
+    residual_risk_source: Optional[str] = Field(
+        None,
+        description="Documentation of laboratory panel and detection rate source for residual risk (e.g. 'ACMG Tier 3 carrier screen panel')",
+    )
+    clinician_confirmed_provenance: bool = Field(
+        False,
+        description="Explicit attestation that this residual risk value is derived from a clinician-reviewed laboratory test report",
     )
 
     model_config = ConfigDict(from_attributes=True)
@@ -90,6 +119,9 @@ class RiskAssessmentResponse(BaseModel):
     assessment_status: AssessmentStatus = Field(..., description="Outcome category")
     risk_estimate: Optional[RiskProbabilityEstimate] = Field(
         None, description="Deterministic risk probabilities if simplified model applies"
+    )
+    residual_risk_source: Optional[str] = Field(
+        None, description="Documented laboratory panel source for residual risk if applicable"
     )
     explanation: str = Field(..., description="Deterministic educational explanation")
     limitations: List[str] = Field(default_factory=list, description="Clinical assumptions and test scope boundaries")
