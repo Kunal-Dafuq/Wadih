@@ -416,9 +416,27 @@ def test_api_risk_cases_with_and_without_partner_consent(client: TestClient, db_
     assert data_unprov["referral_reason"] == "UNVERIFIED_RESIDUAL_RISK_PROVENANCE"
     assert data_unprov["risk_estimate"] is None
 
-    # Now assess with partner Case 2 WITH confirmed clinician provenance via GET legacy:
+    # Counsellor logs in and records authoritative clinical provenance in the database for Case 2
+    login_c = client.post(
+        "/api/v1/auth/login",
+        json={"email": "counsellor@wadih.demo", "password": DEMO_PASSWORD},
+    )
+    headers_c = {"Authorization": f"Bearer {login_c.json()['access_token']}"}
+    client.post(
+        "/api/v1/clinical/provenance",
+        json={
+            "case_id": 2,
+            "condition_code": "HBB_BETA_THAL",
+            "residual_carrier_probability": 0.01,
+            "clinical_source_reference": "Accredited Lab Carrier Panel (99% detection rate)",
+            "notes": "Verified against clinician-reviewed synthetic laboratory report.",
+        },
+        headers=headers_c,
+    )
+
+    # Now assess with partner Case 2 with server-verified clinician provenance:
     resp_consented_with_r = client.get(
-        "/api/v1/risk/cases/1?condition_code=HBB_BETA_THAL&partner_case_id=2&partner_residual_carrier_probability=0.01&clinician_confirmed_provenance=true",
+        "/api/v1/risk/cases/1?condition_code=HBB_BETA_THAL&partner_case_id=2",
         headers=headers_a,
     )
     assert resp_consented_with_r.status_code == 200
@@ -428,7 +446,7 @@ def test_api_risk_cases_with_and_without_partner_consent(client: TestClient, db_
 
 
 def test_secure_post_risk_assessment_endpoint_and_provenance(client: TestClient, db_session: Session):
-    """API Security: Moving risk inputs to POST body prevents URL log leakage and enforces provenance."""
+    """API Security: Moving risk inputs to POST body prevents URL log leakage and enforces server-controlled provenance."""
     seed_database(db_session)
 
     login_a = client.post(
@@ -448,12 +466,13 @@ def test_secure_post_risk_assessment_endpoint_and_provenance(client: TestClient,
     db_session.add(grant)
     db_session.commit()
 
-    # 1. Unconfirmed provenance via POST body -> REVIEW_REQUIRED
+    # 1. Patient attempts to self-certify provenance via POST body without server record -> REVIEW_REQUIRED
     post_unprov_payload = {
         "condition_code": "HBB_BETA_THAL",
         "partner_case_id": 2,
         "partner_residual_carrier_probability": 0.01,
-        "clinician_confirmed_provenance": False,
+        "residual_risk_source": "Patient-Claimed Source",
+        "clinician_confirmed_provenance": True,  # Client tries to claim true!
     }
     resp_post_unprov = client.post(
         "/api/v1/risk/cases/1/assess",
@@ -466,13 +485,28 @@ def test_secure_post_risk_assessment_endpoint_and_provenance(client: TestClient,
     assert res_unprov["referral_reason"] == "UNVERIFIED_RESIDUAL_RISK_PROVENANCE"
     assert res_unprov["risk_estimate"] is None
 
-    # 2. Confirmed provenance via POST body -> EDUCATIONAL_RESULT with 0.0025
+    # 2. Authorised Counsellor creates persisted clinical provenance record
+    login_c = client.post(
+        "/api/v1/auth/login",
+        json={"email": "counsellor@wadih.demo", "password": DEMO_PASSWORD},
+    )
+    headers_c = {"Authorization": f"Bearer {login_c.json()['access_token']}"}
+    prov_resp = client.post(
+        "/api/v1/clinical/provenance",
+        json={
+            "case_id": 2,
+            "condition_code": "HBB_BETA_THAL",
+            "residual_carrier_probability": 0.01,
+            "clinical_source_reference": "Accredited Lab Carrier Panel (99% detection rate)",
+        },
+        headers=headers_c,
+    )
+    assert prov_resp.status_code == 201
+
+    # 3. Now assess via POST body with server-verified provenance -> EDUCATIONAL_RESULT with 0.0025
     post_prov_payload = {
         "condition_code": "HBB_BETA_THAL",
         "partner_case_id": 2,
-        "partner_residual_carrier_probability": 0.01,
-        "residual_risk_source": "Accredited Lab Carrier Panel (99% detection rate)",
-        "clinician_confirmed_provenance": True,
     }
     resp_post_prov = client.post(
         "/api/v1/risk/cases/1/assess",
@@ -485,4 +519,5 @@ def test_secure_post_risk_assessment_endpoint_and_provenance(client: TestClient,
     assert res_prov["risk_estimate"]["affected_probability"] == 0.0025
     assert res_prov["residual_risk_source"] == "Accredited Lab Carrier Panel (99% detection rate)"
     assert any("Accredited Lab Carrier Panel" in a for a in res_prov["assumptions"])
+
 

@@ -46,8 +46,9 @@ The Wadih engineering team operates under strict modular responsibility isolatio
 ### Niharika's Assigned Scope (Implemented, Audited & Hardened)
 - Deterministic genetic risk engine for Autosomal Recessive conditions:
   - Dual confirmed carriers: 25% affected, 50% carrier, 25% non-carrier per pregnancy.
-  - Single carrier + negative partner: Condition-specific residual carrier probability modeling (`P(affected) = r × 1/4`).
-  - Strict clinical safety guardrails: Suppresses numerical probabilities (`INSUFFICIENT_DATA` with `risk_estimate=null`) when residual risk `r` is unavailable. Rejects zero-risk claims for negative screening panels (`EDUCATIONAL_RESULT` with `risk_estimate=null`).
+  - Single carrier + negative partner: Server-controlled clinical provenance modeling (`P(affected) = r × 1/4`).
+  - Zero Client-Side Provenance Trust: Client booleans or free-text source names cannot self-certify clinical provenance; residual risk must be verified against an authoritative `ClinicalResidualRiskRecord` signed off by an authorized clinician.
+  - Strict clinical safety guardrails: Suppresses numerical probabilities (`INSUFFICIENT_DATA` / `REVIEW_REQUIRED` with `risk_estimate=null`) when residual risk `r` or provenance is unverified. Rejects zero-risk claims for negative screening panels (`EDUCATIONAL_RESULT` with `risk_estimate=null`).
   - Clinician-reviewed and sufficient-findings validation gates.
   - Automatic escalation triggers for VUS, unreviewed data, and affected phenotypes.
 - Granular consent management & partner-sharing lifecycle:
@@ -57,7 +58,7 @@ The Wadih engineering team operates under strict modular responsibility isolatio
 - Least-privilege security audit logging & immutability:
   - Automatic credential and genomic sequence sanitization (raw variant strings, passwords, tokens redacted).
   - Role-based scoping: Counsellors restricted strictly to assigned cases, referrals, or their own actions. Unrelated cases or general account actions performed by assigned participants are strictly filtered out. Patients forbidden (403); Admins retain full audit visibility.
-  - Immutability: Application & ORM layer strictly prohibits updates and deletions via SQLAlchemy event listeners; zero modification API routes exposed. (Physical database immutability against direct SQL superusers requires database-level privilege revocation or cloud WORM sinks).
+  - Immutability: Application & ORM layer strictly prohibits updates and deletions via SQLAlchemy mapper listeners and SessionEvents.do_orm_execute bulk guards; zero modification API routes exposed. (Physical database immutability against direct SQL superusers requires database-level privilege revocation or cloud WORM sinks).
   - Atomic transaction commits ensuring business state changes and audit records persist or roll back together.
 
 ### Saiesha's Frontend Interfaces
@@ -111,8 +112,9 @@ Supported error codes:
 | `PATCH` | `/api/v1/referrals/{referral_id}/status` | Yes | Update status (PENDING, SCHEDULED, COMPLETED, CANCELLED) |
 | `POST` | `/api/v1/referrals/{referral_id}/notes` | Yes (Counsellor) | Author clinical/counselling session note |
 | `POST` | `/api/v1/risk/assess` | Yes | Calculate deterministic Mendelian recurrence risk |
-| `POST` | `/api/v1/risk/cases/{case_id}/assess` | Yes | Secure risk calculation via POST body (prevents log leakage; requires provenance) |
+| `POST` | `/api/v1/risk/cases/{case_id}/assess` | Yes | Secure risk calculation via POST body (prevents log leakage; requires server provenance) |
 | `GET` | `/api/v1/risk/cases/{case_id}` | Yes | Legacy risk calculation from stored case (deprecated) |
+| `POST` | `/api/v1/clinical/provenance` | Yes (Counsellor/Admin) | Record authoritative clinician-reviewed residual-risk provenance |
 | `POST` | `/api/v1/consents` | Yes | Create granular consent grant (carrier_status_only, summary_only, full_report) |
 | `GET` | `/api/v1/consents` | Yes | List active and historical consent grants for user |
 | `GET` | `/api/v1/consents/{consent_id}` | Yes | Consent grant detail (granter/grantee restricted) |

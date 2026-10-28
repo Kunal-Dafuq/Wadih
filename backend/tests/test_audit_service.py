@@ -265,6 +265,55 @@ def test_audit_log_immutability_blocks_updates_and_deletions(db_session: Session
         db_session.flush()
 
 
+def test_audit_log_bulk_orm_mutations_blocked(db_session: Session):
+    """Integrity: SessionEvents.do_orm_execute blocks bulk ORM UPDATE and DELETE statements targeting AuditLog."""
+    import pytest
+    from sqlalchemy import update, delete
+
+    entry = AuditService.log_event(
+        db=db_session,
+        action="BULK_TEST_EVENT",
+        resource_type="screening_case",
+        resource_id="103",
+        actor_user_id=1,
+        outcome="SUCCESS",
+        details={"note": "Initial bulk audit test entry"},
+        commit=False,
+    )
+    db_session.flush()
+
+    # 1. Attempt bulk ORM UPDATE targeting AuditLog
+    with pytest.raises(
+        RuntimeError,
+        match="AuditLog records are append-only and immutable. Bulk UPDATE statements via ORM are strictly prohibited.",
+    ):
+        db_session.execute(update(AuditLog).where(AuditLog.id == entry.id).values(action="HACKED_ACTION"))
+
+    db_session.rollback()
+
+    # 2. Re-create and attempt bulk ORM DELETE targeting AuditLog
+    entry2 = AuditService.log_event(
+        db=db_session,
+        action="BULK_TEST_EVENT_2",
+        resource_type="screening_case",
+        resource_id="104",
+        actor_user_id=1,
+        outcome="SUCCESS",
+        details={"note": "Initial bulk audit test entry 2"},
+        commit=False,
+    )
+    db_session.flush()
+
+    with pytest.raises(
+        RuntimeError,
+        match="AuditLog records are append-only and immutable. Bulk DELETE statements via ORM are strictly prohibited.",
+    ):
+        db_session.execute(delete(AuditLog).where(AuditLog.id == entry2.id))
+
+    db_session.rollback()
+
+
+
 def test_transactional_atomic_rollback_on_audit_failure(db_session: Session, monkeypatch):
     """Transactional Consistency: If audit logging fails, the business action is rolled back.
 

@@ -201,6 +201,65 @@ class RiskEngineService:
         if partner_case_id and finding_2:
             both_reviewed = both_reviewed and bool(finding_2.reviewed_flag)
 
+        # Server-controlled clinical provenance lookup:
+        # A client cannot self-certify provenance. Residual risk must be backed by a persisted ClinicalResidualRiskRecord.
+        from app.services.clinical_provenance_service import ClinicalProvenanceService
+
+        final_residual_carrier_prob: Optional[float] = None
+        final_provenance_confirmed: bool = False
+        final_residual_source: Optional[str] = None
+
+        is_single_carrier_and_neg = (
+            (
+                p1_interpretation == ScreeningInterpretation.CARRIER_DETECTED
+                and p2_interpretation == ScreeningInterpretation.NO_VARIANT_DETECTED
+            )
+            or (
+                p1_interpretation == ScreeningInterpretation.NO_VARIANT_DETECTED
+                and p2_interpretation == ScreeningInterpretation.CARRIER_DETECTED
+            )
+        )
+
+        if is_single_carrier_and_neg:
+            neg_case_id = (
+                partner_case_id
+                if p1_interpretation == ScreeningInterpretation.CARRIER_DETECTED
+                else case_1_id
+            )
+            trusted_record = None
+            if neg_case_id:
+                trusted_record = ClinicalProvenanceService.get_valid_provenance(
+                    db=db,
+                    case_id=neg_case_id,
+                    condition_code=condition_code,
+                )
+
+            if trusted_record:
+                # If client passed an explicit probability, verify it matches the authoritative clinician record
+                if (
+                    partner_residual_carrier_probability is not None
+                    and abs(partner_residual_carrier_probability - trusted_record.residual_carrier_probability) > 1e-5
+                ):
+                    # Inconsistent with authoritative clinician record -> fail safely
+                    final_residual_carrier_prob = partner_residual_carrier_probability
+                    final_provenance_confirmed = False
+                    final_residual_source = None
+                else:
+                    final_residual_carrier_prob = trusted_record.residual_carrier_probability
+                    final_provenance_confirmed = True
+                    final_residual_source = trusted_record.clinical_source_reference
+            else:
+                # No trusted clinical record found in the database.
+                # Client-supplied numbers cannot self-certify clinical provenance.
+                if partner_residual_carrier_probability is not None:
+                    final_residual_carrier_prob = partner_residual_carrier_probability
+                    final_provenance_confirmed = False
+                    final_residual_source = None
+                else:
+                    final_residual_carrier_prob = None
+                    final_provenance_confirmed = False
+                    final_residual_source = None
+
         req = RiskAssessmentRequest(
             case_id=case_1.synthetic_case_code,
             condition_code=finding_1.condition_code,
@@ -209,9 +268,9 @@ class RiskEngineService:
             inheritance_pattern=inheritance_mode,
             partner_1_finding=p1_interpretation,
             partner_2_finding=p2_interpretation,
-            partner_2_residual_carrier_probability=partner_residual_carrier_probability,
-            residual_risk_source=residual_risk_source,
-            clinician_confirmed_provenance=clinician_confirmed_provenance,
+            partner_2_residual_carrier_probability=final_residual_carrier_prob,
+            residual_risk_source=final_residual_source,
+            clinician_confirmed_provenance=final_provenance_confirmed,
             findings_sufficient=True,
             is_clinician_reviewed=both_reviewed,
         )

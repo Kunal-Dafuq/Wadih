@@ -108,15 +108,14 @@ Evaluates reproductive risk directly from stored screening findings using a vali
 {
   "condition_code": "HBB_BETA_THAL",
   "partner_case_id": 2,
-  "partner_residual_carrier_probability": 0.01,
-  "residual_risk_source": "LabCorp Expanded Carrier Screen v3 (99% detection rate)",
-  "clinician_confirmed_provenance": true
+  "partner_residual_carrier_probability": 0.01
 }
 ```
-*Clinical Provenance Requirements:*
-- `partner_residual_carrier_probability` (float, optional): Validated residual carrier probability (strictly $0.0 < r < 1.0$) for a partner with `NO_VARIANT_DETECTED`.
-- `clinician_confirmed_provenance` (boolean, default: `false`): Attestation that the supplied residual risk originates from a certified clinician-reviewed laboratory report. If `false` or unverified, syntactic validation alone is **not** accepted as proof, and the engine returns `REVIEW_REQUIRED` (`UNVERIFIED_RESIDUAL_RISK_PROVENANCE`) with `risk_estimate = null`.
-- `residual_risk_source` (string, optional): Description of the accredited laboratory or panel detection rate.
+*Server-Controlled Clinical Provenance Policy:*
+- **Zero Client Trust for Provenance**: A client cannot manufacture clinical provenance by setting a boolean flag or providing a free-text source string. Any client-supplied residual carrier probability is strictly verified against an authoritative, persisted `ClinicalResidualRiskRecord`.
+- **Authoritative Provenance Lookup**: The server queries the database for an active `ClinicalResidualRiskRecord` matching the negative partner's case ID and condition code, signed off by an authorized genetic counsellor or clinical administrator.
+- If no valid clinical record exists (or if client inputs contradict the clinician's record), the engine returns `REVIEW_REQUIRED` (`UNVERIFIED_RESIDUAL_RISK_PROVENANCE`) with `risk_estimate = null`.
+- When an active clinician-reviewed record exists, the server utilizes the verified probability and laboratory source reference, returning `EDUCATIONAL_RESULT` with $P(\text{affected}) = r \times 1/4$.
 - **Access Control:**
   - If `partner_case_id` is supplied, partner must have granted an active `GRANTED` consent grant to the calling user.
   - Returns `403 CONSENT_REQUIRED` if partner consent is missing, expired, or revoked.
@@ -126,12 +125,43 @@ Evaluates reproductive risk directly from stored screening findings using a vali
 #### `GET /api/v1/risk/cases/{case_id}` *(DEPRECATED - Legacy GET Compatibility)*
 - **Status:** **DEPRECATED**. Preserved for backward compatibility with existing GET integrations.
 - **Security Warning:** Query parameters are visible in HTTP access logs and browser histories. Clients should migrate to `POST /api/v1/risk/cases/{case_id}/assess`.
+- **Provenance Gate**: The legacy GET endpoint enforces the exact same server-controlled provenance check. Client query parameters cannot bypass server-side verification.
 - **Query Parameters:**
   - `condition_code` (string, required): e.g. `HBB_BETA_THAL`
   - `partner_case_id` (integer, optional): Case ID of partner's screening report.
-  - `partner_residual_carrier_probability` (float, optional): Residual carrier risk.
-  - `clinician_confirmed_provenance` (boolean, optional, default: `false`): Requires explicit `true` to compute numeric risk.
-  - `residual_risk_source` (string, optional): Panel source documentation.
+  - `partner_residual_carrier_probability` (float, optional): Proposed residual carrier risk (requires matching server record).
+
+---
+
+#### `POST /api/v1/clinical/provenance` *(Clinician / Admin Only)*
+Records an authoritative, clinician-reviewed residual-risk assessment for a negative-screening case finding.
+
+- **Auth Required:** Yes (`role` must be `COUNSELLOR` or `ADMIN`; patients receive `403 FORBIDDEN`)
+- **Request Body (`ClinicalProvenanceCreateRequest`):**
+```json
+{
+  "case_id": 2,
+  "condition_code": "HBB_BETA_THAL",
+  "residual_carrier_probability": 0.01,
+  "clinical_source_reference": "LabCorp Expanded Carrier Screen v3 (99% detection rate)",
+  "notes": "Verified against clinician-reviewed synthetic laboratory report."
+}
+```
+- **Response Body (`ClinicalProvenanceResponse`):**
+```json
+{
+  "id": 1,
+  "case_id": 2,
+  "condition_code": "HBB_BETA_THAL",
+  "residual_carrier_probability": 0.01,
+  "clinical_source_reference": "LabCorp Expanded Carrier Screen v3 (99% detection rate)",
+  "reviewing_clinician_id": 3,
+  "notes": "Verified against clinician-reviewed synthetic laboratory report.",
+  "is_active": true,
+  "reviewed_at": "2026-10-28T19:30:00Z",
+  "created_at": "2026-10-28T19:30:00Z"
+}
+```
 
 ---
 
@@ -286,8 +316,9 @@ Creates a simulated counselling referral task for cases with VUS, dual carrier, 
   - **Admins**: Full platform audit visibility.
 - **Audit Log Immutability & Boundaries:**
   - **Application/API Layer:** No endpoints exist to modify, update, or delete audit records.
-  - **ORM Layer:** Enforced via SQLAlchemy lifecycle listeners (`before_update` and `before_delete`) that raise runtime errors if any mutation is attempted.
-  - **Database Storage Reality:** Application-layer enforcement ensures code cannot tamper with audit records. However, true tamper-proofing against physical DBAs, disk writes, or direct SQL execution with superuser privileges requires database-level privilege revocation (`REVOKE UPDATE, DELETE`) or managed cloud WORM storage (e.g. AWS CloudTrail Object Lock or GCP Audit Logs). We do not claim tamper-proof physical storage.
+  - **ORM Object Layer:** Enforced via SQLAlchemy lifecycle listeners (`before_update` and `before_delete`) on the `AuditLog` mapper, preventing modification or deletion of individual instances.
+  - **ORM Bulk Layer:** Enforced via `SessionEvents.do_orm_execute` guard on `Session`, actively intercepting and rejecting bulk `update(AuditLog)` and `delete(AuditLog)` DML statements.
+  - **Database Storage Reality:** Application and ORM layer enforcement prevents all code and services from tampering with audit records. However, physical database immutability against direct SQL execution by database administrators or superusers requires database-level privilege revocation (`REVOKE UPDATE, DELETE ON shared_audit_logs`) or cloud WORM storage (e.g. AWS CloudTrail Object Lock or GCP Audit Logs). We do not claim tamper-proof physical storage.
 
 ---
 
