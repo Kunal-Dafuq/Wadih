@@ -115,10 +115,9 @@ class EscalationService:
             updated_at=datetime.now(timezone.utc),
         )
         db.add(referral)
-        db.commit()
-        db.refresh(referral)
+        db.flush()
 
-        # Audit event
+        # Audit event in same atomic transaction
         AuditService.log_event(
             db=db,
             action="COUNSELLOR_ESCALATION_CREATED",
@@ -131,7 +130,10 @@ class EscalationService:
                 "reason_code": reason,
                 "urgency_level": urgency,
             },
+            commit=False,
         )
+        db.commit()
+        db.refresh(referral)
 
         counsellor_name = None
         if counsellor and counsellor.profile:

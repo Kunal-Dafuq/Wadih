@@ -94,3 +94,71 @@ def test_unauthorized_consent_revocation_attempt(client: TestClient, db_session:
     resp = client.post(f"/api/v1/consents/{grant.id}/revoke", headers=headers_b)
     assert resp.status_code == 403
     assert resp.json()["error"]["code"] == "FORBIDDEN"
+
+
+def test_case_detail_access_with_full_report_vs_summary_only(client: TestClient, db_session: Session):
+    """Object-Level Access Control: Only explicit full_report consent permits direct /api/v1/cases/{id} access.
+
+    Holders of summary_only receive 404 NOT_FOUND on direct case lookup (IDOR protection),
+    but can access via /api/v1/sharing/shared-cases/{id}.
+    """
+    from app.models.audit import AuditLog
+
+    seed_database(db_session)
+
+    login_a = client.post(
+        "/api/v1/auth/login",
+        json={"email": "patient.a@wadih.demo", "password": DEMO_PASSWORD},
+    )
+    headers_a = {"Authorization": f"Bearer {login_a.json()['access_token']}"}
+
+    login_b = client.post(
+        "/api/v1/auth/login",
+        json={"email": "patient.b@wadih.demo", "password": DEMO_PASSWORD},
+    )
+    headers_b = {"Authorization": f"Bearer {login_b.json()['access_token']}"}
+
+    # 1. Patient A grants summary_only to Patient B
+    grant_summary = client.post(
+        "/api/v1/consents",
+        json={"grantee_user_id": 2, "scope": "summary_only", "case_id": 1},
+        headers=headers_a,
+    )
+    assert grant_summary.status_code == 201
+
+    # Patient B attempts direct case detail -> 404 NOT_FOUND (summary_only is not full_report)
+    resp_direct_denied = client.get("/api/v1/cases/1", headers=headers_b)
+    assert resp_direct_denied.status_code == 404
+    assert resp_direct_denied.json()["error"]["code"] == "NOT_FOUND"
+
+    # Patient B accesses via shared-cases endpoint -> 200 OK
+    resp_shared_ok = client.get("/api/v1/sharing/shared-cases/1", headers=headers_b)
+    assert resp_shared_ok.status_code == 200
+
+    # 2. Patient A now grants full_report to Patient B
+    grant_full = client.post(
+        "/api/v1/consents",
+        json={"grantee_user_id": 2, "scope": "full_report", "case_id": 1},
+        headers=headers_a,
+    )
+    assert grant_full.status_code == 201
+
+    # Patient B attempts direct case detail now -> 200 OK
+    resp_direct_ok = client.get("/api/v1/cases/1", headers=headers_b)
+    assert resp_direct_ok.status_code == 200
+    assert resp_direct_ok.json()["id"] == 1
+    assert "findings" in resp_direct_ok.json()
+
+    # Verify audit log recorded SENSITIVE_RESULT_ACCESSED
+    audit_entry = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.action == "SENSITIVE_RESULT_ACCESSED",
+            AuditLog.actor_user_id == 2,
+            AuditLog.resource_id == "1",
+        )
+        .first()
+    )
+    assert audit_entry is not None
+    assert audit_entry.outcome == "SUCCESS"
+

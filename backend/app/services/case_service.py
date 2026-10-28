@@ -80,8 +80,42 @@ class CaseService:
                 is not None
             )
 
-        # Cross-account sharing is dependent on Niharika's consent engine; deny access without revealing details
+        # Cross-account sharing is governed by Niharika's consent engine
+        has_full_report_consent = False
         if not is_owner and not is_assigned_counsellor:
+            from datetime import datetime, timezone
+            from app.models.consent import ConsentGrant, ConsentStatus, ConsentScope
+            from app.services.audit_service import AuditService
+
+            grant = (
+                db.query(ConsentGrant)
+                .filter(
+                    ConsentGrant.granter_user_id == case.owner_user_id,
+                    ConsentGrant.grantee_user_id == user.id,
+                    ConsentGrant.status == ConsentStatus.GRANTED.value,
+                    ConsentGrant.scope == ConsentScope.FULL_REPORT.value,
+                    ConsentGrant.revoked_at.is_(None),
+                )
+                .first()
+            )
+            if grant:
+                now = datetime.now(timezone.utc)
+                exp = grant.expires_at
+                if exp and exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if not exp or exp >= now:
+                    has_full_report_consent = True
+                    AuditService.log_event(
+                        db=db,
+                        action="SENSITIVE_RESULT_ACCESSED",
+                        resource_type="screening_case",
+                        resource_id=str(case.id),
+                        actor_user_id=user.id,
+                        outcome="SUCCESS",
+                        details={"scope": "full_report", "access_type": "consented_case_detail"},
+                    )
+
+        if not is_owner and not is_assigned_counsellor and not has_full_report_consent:
             raise NotFoundException("Screening case not found.")
 
         findings_resp = [

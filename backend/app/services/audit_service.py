@@ -96,6 +96,46 @@ class AuditService:
 
         query = db.query(AuditLog)
 
+        # Least-privilege scope enforcement for COUNSELLOR role
+        if current_user.role == UserRole.COUNSELLOR:
+            from app.models.referral import ReferralTask
+            from sqlalchemy import or_, and_
+
+            referrals = (
+                db.query(ReferralTask)
+                .filter(ReferralTask.assigned_counsellor_id == current_user.id)
+                .all()
+            )
+            assigned_case_ids = [str(r.case_id) for r in referrals if r.case_id]
+            assigned_referral_ids = [str(r.id) for r in referrals]
+            assigned_participant_ids = [
+                r.participant_user_id for r in referrals if r.participant_user_id
+            ]
+
+            counsellor_scope_conditions = [
+                AuditLog.actor_user_id == current_user.id,
+            ]
+            if assigned_participant_ids:
+                counsellor_scope_conditions.append(
+                    AuditLog.actor_user_id.in_(assigned_participant_ids)
+                )
+            if assigned_case_ids:
+                counsellor_scope_conditions.append(
+                    and_(
+                        AuditLog.resource_type == "screening_case",
+                        AuditLog.resource_id.in_(assigned_case_ids),
+                    )
+                )
+            if assigned_referral_ids:
+                counsellor_scope_conditions.append(
+                    and_(
+                        AuditLog.resource_type == "referral_task",
+                        AuditLog.resource_id.in_(assigned_referral_ids),
+                    )
+                )
+
+            query = query.filter(or_(*counsellor_scope_conditions))
+
         if action_filter:
             query = query.filter(AuditLog.action == action_filter.strip().upper())
         if resource_type_filter:

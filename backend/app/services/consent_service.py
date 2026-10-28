@@ -62,10 +62,9 @@ class ConsentService:
             created_at=datetime.now(timezone.utc),
         )
         db.add(grant)
-        db.commit()
-        db.refresh(grant)
+        db.flush()
 
-        # Audit Event
+        # Audit Event in same atomic transaction
         AuditService.log_event(
             db=db,
             action="CONSENT_GRANTED",
@@ -79,7 +78,10 @@ class ConsentService:
                 "purpose": grant.purpose,
                 "case_id": grant.case_id,
             },
+            commit=False,
         )
+        db.commit()
+        db.refresh(grant)
 
         return ConsentService._format_consent_response(grant)
 
@@ -122,8 +124,7 @@ class ConsentService:
             created_at=datetime.now(timezone.utc),
         )
         db.add(grant)
-        db.commit()
-        db.refresh(grant)
+        db.flush()
 
         AuditService.log_event(
             db=db,
@@ -137,7 +138,10 @@ class ConsentService:
                 "scope": grant.scope,
                 "status": "PENDING",
             },
+            commit=False,
         )
+        db.commit()
+        db.refresh(grant)
 
         return ConsentService._format_consent_response(grant)
 
@@ -162,9 +166,6 @@ class ConsentService:
             raise ForbiddenException("Only the granting participant can approve consent.")
 
         grant.status = ConsentStatus.GRANTED.value
-        db.commit()
-        db.refresh(grant)
-
         AuditService.log_event(
             db=db,
             action="CONSENT_GRANTED",
@@ -173,7 +174,10 @@ class ConsentService:
             actor_user_id=user.id,
             outcome="SUCCESS",
             details={"grantee_id": grant.grantee_user_id, "scope": grant.scope},
+            commit=False,
         )
+        db.commit()
+        db.refresh(grant)
 
         return ConsentService._format_consent_response(grant)
 
@@ -199,9 +203,6 @@ class ConsentService:
 
         grant.status = ConsentStatus.REVOKED.value
         grant.revoked_at = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(grant)
-
         AuditService.log_event(
             db=db,
             action="CONSENT_REVOKED",
@@ -210,7 +211,10 @@ class ConsentService:
             actor_user_id=user.id,
             outcome="SUCCESS",
             details={"grantee_id": grant.grantee_user_id, "scope": grant.scope},
+            commit=False,
         )
+        db.commit()
+        db.refresh(grant)
 
         return ConsentService._format_consent_response(grant)
 
@@ -391,24 +395,41 @@ class ConsentService:
         findings_summary = []
         for f in case.findings:
             if grant.scope == ConsentScope.CARRIER_STATUS_ONLY.value:
-                # Carrier status only: summary text redacted
+                # Carrier status only: summary text and classification redacted
                 findings_summary.append(
                     SharedFindingSummary(
                         condition_code=f.condition_code,
                         condition_name=f.condition_name,
                         carrier_state=f.carrier_state,
                         inheritance_mode=f.inheritance_mode,
+                        classification_state=None,
+                        reviewed_flag=None,
                         summary_text=None,
                     )
                 )
-            else:
-                # summary_only or full_report
+            elif grant.scope == ConsentScope.SUMMARY_ONLY.value:
+                # Summary only: educational summary included, classification redacted
                 findings_summary.append(
                     SharedFindingSummary(
                         condition_code=f.condition_code,
                         condition_name=f.condition_name,
                         carrier_state=f.carrier_state,
                         inheritance_mode=f.inheritance_mode,
+                        classification_state=None,
+                        reviewed_flag=None,
+                        summary_text=f.summary_text,
+                    )
+                )
+            else:
+                # full_report: complete finding disclosure
+                findings_summary.append(
+                    SharedFindingSummary(
+                        condition_code=f.condition_code,
+                        condition_name=f.condition_name,
+                        carrier_state=f.carrier_state,
+                        inheritance_mode=f.inheritance_mode,
+                        classification_state=f.classification_state,
+                        reviewed_flag=f.reviewed_flag,
                         summary_text=f.summary_text,
                     )
                 )

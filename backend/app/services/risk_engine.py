@@ -41,6 +41,21 @@ class RiskEngineService:
         if not request.condition_name or not request.condition_name.strip():
             raise ValidationException("Condition name must not be empty.")
 
+        # Residual carrier probability validations
+        if request.partner_1_residual_carrier_probability is not None:
+            r1 = request.partner_1_residual_carrier_probability
+            if r1 <= 0.0 or r1 >= 1.0:
+                raise ValidationException("Partner 1 residual carrier probability must be strictly between 0.0 and 1.0 (exclusive).")
+            if request.partner_1_finding != ScreeningInterpretation.NO_VARIANT_DETECTED:
+                raise ValidationException("Residual carrier probability is only applicable for partners with NO_VARIANT_DETECTED screening interpretation.")
+
+        if request.partner_2_residual_carrier_probability is not None:
+            r2 = request.partner_2_residual_carrier_probability
+            if r2 <= 0.0 or r2 >= 1.0:
+                raise ValidationException("Partner 2 residual carrier probability must be strictly between 0.0 and 1.0 (exclusive).")
+            if request.partner_2_finding != ScreeningInterpretation.NO_VARIANT_DETECTED:
+                raise ValidationException("Residual carrier probability is only applicable for partners with NO_VARIANT_DETECTED screening interpretation.")
+
         # 2. Inheritance pattern guardrail
         if request.inheritance_pattern != InheritancePattern.AUTOSOMAL_RECESSIVE:
             return RiskAssessmentResponse(
@@ -80,6 +95,8 @@ class RiskEngineService:
             partner_2_finding=request.partner_2_finding,
             condition_name=request.condition_name,
             gene_symbol=request.gene_symbol,
+            partner_1_residual_carrier_probability=request.partner_1_residual_carrier_probability,
+            partner_2_residual_carrier_probability=request.partner_2_residual_carrier_probability,
             findings_sufficient=request.findings_sufficient,
             is_clinician_reviewed=request.is_clinician_reviewed,
         )
@@ -107,6 +124,7 @@ class RiskEngineService:
         condition_code: str,
         user: User,
         partner_case_id: Optional[int] = None,
+        partner_residual_carrier_probability: Optional[float] = None,
     ) -> RiskAssessmentResponse:
         """Assess risk directly from stored synthetic cases in the database, verifying ownership and consent."""
         # 1. Fetch Primary Case (Case 1)
@@ -181,6 +199,7 @@ class RiskEngineService:
             inheritance_pattern=inheritance_mode,
             partner_1_finding=p1_interpretation,
             partner_2_finding=p2_interpretation,
+            partner_2_residual_carrier_probability=partner_residual_carrier_probability,
             findings_sufficient=True,
             is_clinician_reviewed=finding_1.reviewed_flag,
         )

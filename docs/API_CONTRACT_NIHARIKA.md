@@ -44,6 +44,8 @@ Calculates deterministic recurrence risk and explanations for structured partner
   "inheritance_pattern": "AUTOSOMAL_RECESSIVE",
   "partner_1_finding": "CARRIER_DETECTED",
   "partner_2_finding": "CARRIER_DETECTED",
+  "partner_1_residual_carrier_probability": null,
+  "partner_2_residual_carrier_probability": null,
   "findings_sufficient": true,
   "is_clinician_reviewed": true
 }
@@ -51,6 +53,14 @@ Calculates deterministic recurrence risk and explanations for structured partner
 *Enum Values:*
 - `inheritance_pattern`: `"AUTOSOMAL_RECESSIVE"`, `"AUTOSOMAL_DOMINANT"`, `"X_LINKED_RECESSIVE"`, `"X_LINKED_DOMINANT"`, `"MITOCHONDRIAL"`, `"MULTIFACTORIAL"`, `"UNKNOWN"`
 - `partner_1_finding` / `partner_2_finding`: `"CARRIER_DETECTED"`, `"NO_VARIANT_DETECTED"`, `"UNCERTAIN_SIGNIFICANCE"`, `"POSITIVE_AFFECTED"`, `"NOT_PERFORMED"`, `"INCONCLUSIVE"`
+- `partner_1_residual_carrier_probability` / `partner_2_residual_carrier_probability` (float, optional): Validated condition-specific residual carrier probability `r` (strictly `0.0 < r < 1.0`). Must only be supplied for a partner whose finding is `NO_VARIANT_DETECTED`.
+
+*Clinical Risk Calculation Rules:*
+- **Dual Carriers (`CARRIER_DETECTED` + `CARRIER_DETECTED`):** Standard 25% affected, 50% carrier, 25% non-carrier per pregnancy.
+- **Single Carrier + Confirmed Negative Partner (`CARRIER_DETECTED` + `NO_VARIANT_DETECTED`):**
+  - If validated laboratory residual carrier probability `r` is provided: `P(affected child) = r × 1/4`, `P(carrier) = 0.50`, `P(unaffected non-carrier) = 0.50 - 0.25 × r`.
+  - If residual carrier probability `r` is NOT provided: Returns `INSUFFICIENT_DATA` with `risk_estimate = null` (no fabricated numbers or false zero-risk claims).
+- **Both Negative (`NO_VARIANT_DETECTED` + `NO_VARIANT_DETECTED`):** Returns `EDUCATIONAL_RESULT` with `risk_estimate = null` (strictly prevents false 0.0% zero-risk claims since testing panels cannot rule out rare or deep-intronic variants).
 
 - **Response Body (`RiskAssessmentResponse`):**
 ```json
@@ -65,6 +75,7 @@ Calculates deterministic recurrence risk and explanations for structured partner
     "affected_probability": 0.25,
     "carrier_probability": 0.50,
     "unaffected_non_carrier_probability": 0.25,
+    "residual_carrier_probability_used": null,
     "summary_label": "25% Affected, 50% Carrier, 25% Unaffected Non-Carrier per pregnancy",
     "recurrence_note": "Each pregnancy is an independent event with a 25% (1 in 4) chance of having the condition. Prior pregnancy outcomes do not influence future pregnancies."
   },
@@ -86,13 +97,14 @@ Calculates deterministic recurrence risk and explanations for structured partner
 
 ---
 
-#### `GET /api/v1/risk/cases/{case_id}?condition_code=HBB_BETA_THAL&partner_case_id=2`
+#### `GET /api/v1/risk/cases/{case_id}?condition_code=HBB_BETA_THAL&partner_case_id=2&partner_residual_carrier_probability=0.01`
 Calculates risk directly from stored screening cases in the database.
 
 - **Auth Required:** Yes
 - **Query Parameters:**
   - `condition_code` (string, required): e.g. `HBB_BETA_THAL`
   - `partner_case_id` (integer, optional): Case ID of partner's screening report.
+  - `partner_residual_carrier_probability` (float, optional): Validated condition-specific residual carrier probability for partner (e.g. `0.01` for 1 in 100).
 - **Access Control:**
   - If `partner_case_id` is provided, partner must have granted an active `GRANTED` consent grant to the calling user.
   - Returns `403 CONSENT_REQUIRED` if partner has not approved consent.

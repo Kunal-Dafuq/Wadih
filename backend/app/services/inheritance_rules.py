@@ -27,6 +27,8 @@ def evaluate_autosomal_recessive_case(
     partner_2_finding: Optional[ScreeningInterpretation],
     condition_name: str,
     gene_symbol: Optional[str] = None,
+    partner_1_residual_carrier_probability: Optional[float] = None,
+    partner_2_residual_carrier_probability: Optional[float] = None,
     findings_sufficient: bool = True,
     is_clinician_reviewed: bool = True,
 ) -> Tuple[
@@ -116,38 +118,44 @@ def evaluate_autosomal_recessive_case(
         partner_1_finding == ScreeningInterpretation.NO_VARIANT_DETECTED
         and partner_2_finding == ScreeningInterpretation.NO_VARIANT_DETECTED
     ):
-        risk_est = RiskProbabilityEstimate(
-            affected_probability=0.0,
-            carrier_probability=None,
-            unaffected_non_carrier_probability=None,
-            summary_label="Significantly Reduced / Residual Risk Only",
-            recurrence_note="No pathogenic variants identified in either partner on the reviewed screening panel.",
-        )
+        # Clinical safety rule: A negative carrier screen reduces but does NOT eliminate risk.
+        # Numerical probability is NOT reported as 0.0 because residual risk is unquantified without panel-specific detection rates.
         explanation = (
             f"Within the scope of the reviewed synthetic carrier screening data, no disease-causing variants were identified in either partner for {condition_name}{gene_display}. "
             "This significantly reduces the reproductive probability of having a child with this condition. "
-            "However, a negative screening test does not guarantee zero risk, because standard screening panels test for common pathogenic variants and do not detect all possible rare alterations or new mutations."
+            "However, a negative screening test does not guarantee zero risk, and this system does not assign a zero-risk numerical probability. "
+            "Standard screening panels test for common pathogenic variants and do not detect all possible rare alterations, deep intronic mutations, or new mutations. "
+            "Couple-level reproductive risk is residual only and depends on laboratory-specific detection rates."
         )
         return (
             AssessmentStatus.EDUCATIONAL_RESULT,
-            risk_est,
+            None,
             explanation,
             STANDARD_LIMITATIONS
-            + ["Negative screening does not guarantee the absence of all genetic risks or ensure a healthy child."],
+            + [
+                "Negative screening does not guarantee the absence of all genetic risks or ensure a healthy child.",
+                "No numerical zero-risk probability is assigned; residual risk remains unquantified without panel detection rates.",
+            ],
             assumptions,
             False,
             None,
         )
 
     # Case B.1: Single carrier with unlinked / missing partner
-    if partner_1_finding == ScreeningInterpretation.CARRIER_DETECTED and (
-        partner_2_finding is None or partner_2_finding == ScreeningInterpretation.NOT_PERFORMED
+    if (
+        partner_1_finding == ScreeningInterpretation.CARRIER_DETECTED
+        and (partner_2_finding is None or partner_2_finding == ScreeningInterpretation.NOT_PERFORMED)
+    ) or (
+        partner_2_finding == ScreeningInterpretation.CARRIER_DETECTED
+        and (partner_1_finding is None or partner_1_finding == ScreeningInterpretation.NOT_PERFORMED)
     ):
+        carrier_label = "Partner 1" if partner_1_finding == ScreeningInterpretation.CARRIER_DETECTED else "Partner 2"
+        other_label = "Partner 2" if carrier_label == "Partner 1" else "Partner 1"
         explanation = (
-            f"Partner 1 was identified as a carrier for {condition_name}{gene_display}. "
+            f"{carrier_label} was identified as a carrier for {condition_name}{gene_display}. "
             "Being a carrier typically means having one altered copy of the gene and one working copy; carriers are generally healthy and do not experience symptoms. "
-            "A couple-level risk calculation cannot be performed because Partner 2 has not completed screening or their results are not linked. "
-            "Screening Partner 2 is recommended to determine joint reproductive risk."
+            f"A couple-level risk calculation cannot be performed because {other_label} has not completed screening or their results are not linked. "
+            f"Screening {other_label} is recommended to determine joint reproductive risk."
         )
         return (
             AssessmentStatus.INSUFFICIENT_DATA,
@@ -168,25 +176,86 @@ def evaluate_autosomal_recessive_case(
         partner_1_finding == ScreeningInterpretation.NO_VARIANT_DETECTED
         and partner_2_finding == ScreeningInterpretation.CARRIER_DETECTED
     ):
+        # Identify the residual carrier risk of the negative-screening partner
+        neg_partner_r = (
+            partner_2_residual_carrier_probability
+            if partner_1_finding == ScreeningInterpretation.CARRIER_DETECTED
+            else partner_1_residual_carrier_probability
+        )
+
+        # Safety rule: If residual carrier probability is unavailable, do NOT invent or default a number!
+        if neg_partner_r is None:
+            explanation = (
+                f"One partner was confirmed as a carrier for {condition_name}{gene_display}, while the other partner tested negative on the reviewed carrier panel. "
+                "Being a carrier means having one altered copy of the gene and one working copy; carriers are generally healthy and unaffected. "
+                "In autosomal recessive inheritance, an affected child can occur only if the negative-screening partner is an undetected carrier. "
+                "Under the standard Mendelian model, the couple's per-pregnancy affected probability is calculated as P(affected child) = r × 1/4, "
+                "where validated residual carrier probability (r) represents the chance that the negative-screening partner is an undetected carrier. "
+                "Because a validated condition-specific residual carrier probability (r) was not provided, a couple-level numerical risk cannot be calculated. "
+                "Consultation with a genetic counsellor or the testing laboratory is recommended to obtain the laboratory detection rate and residual risk estimate."
+            )
+            return (
+                AssessmentStatus.INSUFFICIENT_DATA,
+                None,
+                explanation,
+                STANDARD_LIMITATIONS
+                + [
+                    "Residual risk information was not provided; no numerical probability can be calculated without validated laboratory residual carrier risk.",
+                    "Carrier status in a single partner does not cause medical symptoms for that person in classical autosomal recessive conditions.",
+                ],
+                assumptions,
+                False,
+                None,
+            )
+
+        # When validated residual risk r is provided (0.0 < r < 1.0):
+        # P(affected child per pregnancy) = r × 1/4
+        # P(carrier child per pregnancy) = 0.50
+        # P(unaffected non-carrier child per pregnancy) = 0.50 - 0.25 * r
+        r = neg_partner_r
+        affected_prob = round(r * 0.25, 6)
+        carrier_prob = 0.50
+        unaffected_non_carrier_prob = round(0.50 - 0.25 * r, 6)
+
+        summary_label = (
+            f"Affected Child: {affected_prob:.4%} (P = r × 1/4 with r = {r:.4%}); Carrier Child: 50.00%"
+        )
+        recurrence_note = (
+            f"Each pregnancy has an independent probability calculated from the negative partner's validated residual carrier probability "
+            f"(P = r × 1/4, where r = {r}). Prior pregnancy outcomes do not influence future pregnancies."
+        )
+
         risk_est = RiskProbabilityEstimate(
-            affected_probability=0.0,
-            carrier_probability=0.50,
-            unaffected_non_carrier_probability=0.50,
-            summary_label="Affected Risk: Residual Only; Carrier Chance: ~50%",
-            recurrence_note="Each pregnancy has an estimated 50% chance of being an unaffected carrier like the carrier parent, assuming the other parent has two working gene copies.",
+            affected_probability=affected_prob,
+            carrier_probability=carrier_prob,
+            unaffected_non_carrier_probability=unaffected_non_carrier_prob,
+            residual_carrier_probability_used=r,
+            summary_label=summary_label,
+            recurrence_note=recurrence_note,
         )
+
         explanation = (
-            f"One partner was confirmed as a carrier for {condition_name}{gene_display}, while the other partner tested negative on the reviewed carrier panel. "
-            "Because an autosomal recessive condition requires inheriting two altered gene copies (one from each biological parent) to cause disease, the probability of an affected child is reduced to the background residual risk of the negative partner. "
-            "With each pregnancy, there is an estimated 50% chance the child will inherit the carrier copy and be an unaffected carrier, and a 50% chance the child will inherit working copies from both parents."
+            f"One partner is a confirmed carrier for {condition_name}{gene_display}, and the other partner tested negative on the carrier panel "
+            f"with a validated laboratory residual carrier probability of {r:.4%} (approx. 1 in {int(round(1.0 / r)) if r > 0 else 'N/A'}).\n\n"
+            f"Under the validated autosomal recessive Mendelian teaching model, an affected child requires inheriting altered copies from both parents. "
+            f"The per-pregnancy probability of an affected child is:\n"
+            f"• P(affected child) = r × 1/4 = {affected_prob:.4%} (approx. 1 in {int(round(1.0 / affected_prob)) if affected_prob > 0 else 'N/A'}).\n"
+            f"• P(carrier child) = 50.00% (1 in 2 chance of inheriting the altered copy from the carrier parent and a working copy from the partner).\n"
+            f"• P(unaffected non-carrier child) = {unaffected_non_carrier_prob:.4%}.\n\n"
+            "These probabilities apply separately and independently to each pregnancy and are not predictions for a particular child."
         )
+
         return (
             AssessmentStatus.EDUCATIONAL_RESULT,
             risk_est,
             explanation,
             STANDARD_LIMITATIONS
-            + ["Carrier status in a child carries no direct personal health symptoms in classical autosomal recessive conditions."],
-            assumptions,
+            + ["Calculations reflect the specific residual carrier risk (r) provided by the laboratory."],
+            assumptions
+            + [
+                f"Negative-screening partner's validated post-test residual carrier probability is r = {r}.",
+                "Simplified Mendelian teaching model: P(affected child per pregnancy) = r × 1/4.",
+            ],
             False,
             None,
         )
@@ -200,6 +269,7 @@ def evaluate_autosomal_recessive_case(
             affected_probability=0.25,
             carrier_probability=0.50,
             unaffected_non_carrier_probability=0.25,
+            residual_carrier_probability_used=None,
             summary_label="25% Affected, 50% Carrier, 25% Unaffected Non-Carrier per pregnancy",
             recurrence_note="Each pregnancy is an independent event with a 25% (1 in 4) chance of having the condition. Prior pregnancy outcomes do not influence future pregnancies.",
         )

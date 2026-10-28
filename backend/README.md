@@ -43,16 +43,25 @@ The Wadih engineering team operates under strict modular responsibility isolatio
 - Standardized API error envelopes conforming to the unified error contract.
 - Comprehensive automated test suite with pytest.
 
-### Teammate Interfaces & Remaining Dependencies
-- **Niharika (`niharika/advanced-backend`)**:
-  - Deterministic genetic risk calculation engine (cross-carrier matching).
-  - Granular recipient/resource/scope consent grant management.
-  - Revocation enforcement logic.
-  - Security audit log persistence.
-  - Clinical escalation review policies.
-  *Note: Endpoints requiring partner-sharing or clinical escalation deny unauthorized access until Niharika's policy engine is integrated.*
-- **Saiesha (`saiesha/frontend`)**:
-  - React/TypeScript frontend consuming the `/api/v1` endpoints documented below.
+### Niharika's Assigned Scope (Implemented, Audited & Hardened)
+- Deterministic genetic risk engine for Autosomal Recessive conditions:
+  - Dual confirmed carriers: 25% affected, 50% carrier, 25% non-carrier per pregnancy.
+  - Single carrier + negative partner: Condition-specific residual carrier probability modeling (`P(affected) = r × 1/4`).
+  - Strict clinical safety guardrails: Suppresses numerical probabilities (`INSUFFICIENT_DATA` with `risk_estimate=null`) when residual risk `r` is unavailable. Rejects zero-risk claims for negative screening panels (`EDUCATIONAL_RESULT` with `risk_estimate=null`).
+  - Clinician-reviewed and sufficient-findings validation gates.
+  - Automatic escalation triggers for VUS, unreviewed data, and affected phenotypes.
+- Granular consent management & partner-sharing lifecycle:
+  - Scopes: `carrier_status_only` (field-level redaction), `summary_only`, `full_report`.
+  - Transactionally atomic consent grant, approve, and revoke operations with immediate access denial upon revocation or expiration.
+  - Direct case details (`/api/v1/cases/{case_id}`) guarded by IDOR checks, permitting cross-account access only under explicit active `full_report` consent.
+- Least-privilege security audit logging & sanitization:
+  - Automatic credential and genomic sequence sanitization (raw variant strings, passwords, tokens redacted).
+  - Role-based scoping: Counsellors restricted strictly to assigned cases, referrals, or participants; Patients forbidden (403); Admins retain full audit visibility.
+  - Atomic transaction commits ensuring business state changes and audit records persist or roll back together.
+
+### Saiesha's Frontend Interfaces
+- Saiesha (`saiesha/frontend`):
+  - React/TypeScript frontend consuming the `/api/v1` endpoints documented in `docs/API_CONTRACT_NIHARIKA.md`.
 
 ---
 

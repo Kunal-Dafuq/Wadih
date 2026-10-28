@@ -39,6 +39,9 @@ class RiskProbabilityEstimate(BaseModel):
     unaffected_non_carrier_probability: Optional[float] = Field(
         None, description="Per-pregnancy probability of a child inheriting neither altered copy"
     )
+    residual_carrier_probability_used: Optional[float] = Field(
+        None, description="Validated post-test residual carrier probability (r) utilized for calculation"
+    )
     summary_label: str = Field(..., description="Short clinical/educational summary label")
     recurrence_note: str = Field(
         ...,
@@ -59,6 +62,14 @@ class RiskAssessmentRequest(BaseModel):
     )
     partner_2_finding: Optional[ScreeningInterpretation] = Field(
         None, description="Clinician-confirmed finding for secondary partner (None if untested/unlinked)"
+    )
+    partner_1_residual_carrier_probability: Optional[float] = Field(
+        None,
+        description="Validated condition-specific residual carrier probability (0.0 < r < 1.0) for partner 1 if negative",
+    )
+    partner_2_residual_carrier_probability: Optional[float] = Field(
+        None,
+        description="Validated condition-specific residual carrier probability (0.0 < r < 1.0) for partner 2 if negative",
     )
     findings_sufficient: bool = Field(
         True, description="Whether laboratory findings are sufficient for supported model"

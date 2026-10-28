@@ -70,6 +70,8 @@ class SharedFindingSummary(BaseModel):
     condition_name: str
     carrier_state: str
     inheritance_mode: str
+    classification_state: Optional[str] = None
+    reviewed_flag: Optional[bool] = None
     summary_text: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)

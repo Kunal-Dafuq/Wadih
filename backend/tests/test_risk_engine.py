@@ -15,8 +15,12 @@ from app.seed.seed_demo import seed_database, DEMO_PASSWORD
 from app.models.consent import ConsentGrant, ConsentStatus, ConsentScope
 
 
-def test_risk_engine_case_a_both_negative():
-    """Case A: Neither partner has a relevant shared finding identified."""
+def test_risk_engine_case_a_both_negative_no_zero_risk_claim():
+    """Case A: Neither partner has a relevant shared finding identified.
+
+    Clinical Safety Guarantee: A negative carrier screen reduces risk significantly,
+    but does NOT eliminate it. Numerical probability must NOT be reported as 0.0.
+    """
     req = RiskAssessmentRequest(
         condition_code="CFTR_CYSTIC_FIBROSIS",
         condition_name="Cystic Fibrosis",
@@ -32,12 +36,14 @@ def test_risk_engine_case_a_both_negative():
     assert res.assessment_status == AssessmentStatus.EDUCATIONAL_RESULT
     assert res.rule_version == RULE_VERSION
     assert res.requires_genetic_counselor is False
-    assert res.risk_estimate is not None
-    assert res.risk_estimate.affected_probability == 0.0
+    # Clinical Safety: Numerical zero-risk probability is NOT assigned
+    assert res.risk_estimate is None
 
-    # Explicit clinical safety checks
+    # Explicit clinical safety checks in explanation and limitations
     assert "does not guarantee zero risk" in res.explanation
+    assert "does not assign a zero-risk numerical probability" in res.explanation
     assert any("does not guarantee" in lim for lim in res.limitations)
+    assert any("No numerical zero-risk probability is assigned" in lim for lim in res.limitations)
 
 
 def test_risk_engine_case_b_single_carrier_missing_partner():
@@ -61,8 +67,12 @@ def test_risk_engine_case_b_single_carrier_missing_partner():
     assert "carriers are generally healthy" in res.explanation
 
 
-def test_risk_engine_case_b_single_carrier_confirmed_negative_partner():
-    """Case B.2: One partner is carrier, other partner tested negative on panel."""
+def test_risk_engine_case_b_single_carrier_negative_partner_without_residual_risk():
+    """Case B.2a: One partner is carrier, other tested negative, but residual risk is unavailable.
+
+    Clinical Safety: When validated laboratory residual carrier probability (r) is unavailable,
+    the engine MUST NOT invent default numbers. It returns INSUFFICIENT_DATA with risk_estimate=None.
+    """
     req = RiskAssessmentRequest(
         condition_code="HBB_BETA_THAL",
         condition_name="Beta Thalassemia",
@@ -70,6 +80,36 @@ def test_risk_engine_case_b_single_carrier_confirmed_negative_partner():
         inheritance_pattern=InheritancePattern.AUTOSOMAL_RECESSIVE,
         partner_1_finding=ScreeningInterpretation.CARRIER_DETECTED,
         partner_2_finding=ScreeningInterpretation.NO_VARIANT_DETECTED,
+        partner_2_residual_carrier_probability=None,  # Not provided
+        findings_sufficient=True,
+        is_clinician_reviewed=True,
+    )
+    res = RiskEngineService.assess_risk(req)
+
+    assert res.assessment_status == AssessmentStatus.INSUFFICIENT_DATA
+    # Safety: No fabricated numerical probabilities
+    assert res.risk_estimate is None
+    assert "residual carrier probability (r)" in res.explanation
+    assert "P(affected child) = r × 1/4" in res.explanation
+    assert "couple-level numerical risk cannot be calculated" in res.explanation
+
+
+def test_risk_engine_case_b_single_carrier_negative_partner_with_validated_residual_risk():
+    """Case B.2b: One partner is carrier, other tested negative WITH validated residual risk r = 0.01 (1 in 100).
+
+    Mathematical Relationship:
+    Under Mendelian model: P(affected child per pregnancy) = r × 1/4 = 0.01 × 0.25 = 0.0025 (1 in 400).
+    Carrier probability = 50.00%.
+    Unaffected non-carrier = 0.50 - 0.25 * r = 0.4975.
+    """
+    req = RiskAssessmentRequest(
+        condition_code="HBB_BETA_THAL",
+        condition_name="Beta Thalassemia",
+        gene_symbol="HBB",
+        inheritance_pattern=InheritancePattern.AUTOSOMAL_RECESSIVE,
+        partner_1_finding=ScreeningInterpretation.CARRIER_DETECTED,
+        partner_2_finding=ScreeningInterpretation.NO_VARIANT_DETECTED,
+        partner_2_residual_carrier_probability=0.01,  # 1 in 100 validated residual carrier probability
         findings_sufficient=True,
         is_clinician_reviewed=True,
     )
@@ -77,11 +117,76 @@ def test_risk_engine_case_b_single_carrier_confirmed_negative_partner():
 
     assert res.assessment_status == AssessmentStatus.EDUCATIONAL_RESULT
     assert res.risk_estimate is not None
-    assert res.risk_estimate.affected_probability == 0.0
+    assert res.risk_estimate.residual_carrier_probability_used == 0.01
+    assert res.risk_estimate.affected_probability == 0.0025  # exactly r * 0.25
     assert res.risk_estimate.carrier_probability == 0.50
+    assert res.risk_estimate.unaffected_non_carrier_probability == 0.4975
     assert res.requires_genetic_counselor is False
-    assert "50% chance the child will inherit the carrier copy" in res.explanation
-    assert "reduced to the background residual risk" in res.explanation
+    assert "P(affected child) = r × 1/4 = 0.2500%" in res.explanation
+    assert "approx. 1 in 400" in res.explanation
+
+
+def test_risk_engine_residual_risk_mathematical_consistency():
+    """Verify mathematical relationship P(affected) = r × 1/4 across multiple validated r values."""
+    test_cases = [
+        (0.04, 0.0100),   # r = 1/25  -> affected = 1/100 (0.01)
+        (0.02, 0.0050),   # r = 1/50  -> affected = 1/200 (0.005)
+        (0.008, 0.0020),  # r = 1/125 -> affected = 1/500 (0.002)
+        (0.001, 0.00025), # r = 1/1000-> affected = 1/4000 (0.00025)
+    ]
+
+    for r_val, expected_affected in test_cases:
+        req = RiskAssessmentRequest(
+            condition_code="CFTR_CYSTIC_FIBROSIS",
+            condition_name="Cystic Fibrosis",
+            gene_symbol="CFTR",
+            inheritance_pattern=InheritancePattern.AUTOSOMAL_RECESSIVE,
+            partner_1_finding=ScreeningInterpretation.CARRIER_DETECTED,
+            partner_2_finding=ScreeningInterpretation.NO_VARIANT_DETECTED,
+            partner_2_residual_carrier_probability=r_val,
+            findings_sufficient=True,
+            is_clinician_reviewed=True,
+        )
+        res = RiskEngineService.assess_risk(req)
+        assert res.assessment_status == AssessmentStatus.EDUCATIONAL_RESULT
+        assert res.risk_estimate is not None
+        assert abs(res.risk_estimate.affected_probability - expected_affected) < 1e-6
+        assert res.risk_estimate.carrier_probability == 0.50
+        expected_non_carrier = round(0.50 - 0.25 * r_val, 6)
+        assert abs(res.risk_estimate.unaffected_non_carrier_probability - expected_non_carrier) < 1e-6
+
+
+def test_risk_engine_residual_risk_boundary_and_invalid_values():
+    """Boundary values: r <= 0.0 or r >= 1.0 must be rejected with ValidationException."""
+    invalid_r_values = [-0.05, 0.0, 1.0, 1.05]
+
+    for bad_r in invalid_r_values:
+        with pytest.raises(ValidationException):
+            RiskEngineService.assess_risk(
+                RiskAssessmentRequest(
+                    condition_code="HBB_BETA_THAL",
+                    condition_name="Beta Thalassemia",
+                    inheritance_pattern=InheritancePattern.AUTOSOMAL_RECESSIVE,
+                    partner_1_finding=ScreeningInterpretation.CARRIER_DETECTED,
+                    partner_2_finding=ScreeningInterpretation.NO_VARIANT_DETECTED,
+                    partner_2_residual_carrier_probability=bad_r,
+                )
+            )
+
+
+def test_risk_engine_residual_risk_inappropriate_partner_state():
+    """Safety: Providing residual carrier risk for a partner who is CARRIER_DETECTED must be rejected."""
+    with pytest.raises(ValidationException):
+        RiskEngineService.assess_risk(
+            RiskAssessmentRequest(
+                condition_code="HBB_BETA_THAL",
+                condition_name="Beta Thalassemia",
+                inheritance_pattern=InheritancePattern.AUTOSOMAL_RECESSIVE,
+                partner_1_finding=ScreeningInterpretation.CARRIER_DETECTED,
+                partner_2_finding=ScreeningInterpretation.CARRIER_DETECTED,
+                partner_2_residual_carrier_probability=0.01,  # Inappropriate for confirmed carrier
+            )
+        )
 
 
 def test_risk_engine_case_c_dual_carrier_autosomal_recessive():
@@ -173,6 +278,7 @@ def test_risk_engine_guardrails_unreviewed_and_insufficient():
     res_unreviewed = RiskEngineService.assess_risk(req_unreviewed)
     assert res_unreviewed.assessment_status == AssessmentStatus.REVIEW_REQUIRED
     assert res_unreviewed.referral_reason == "REPORT_REVIEW_PENDING"
+    assert res_unreviewed.risk_estimate is None
 
     # 2. Insufficient laboratory data
     req_insufficient = RiskAssessmentRequest(
@@ -187,6 +293,7 @@ def test_risk_engine_guardrails_unreviewed_and_insufficient():
     res_insufficient = RiskEngineService.assess_risk(req_insufficient)
     assert res_insufficient.assessment_status == AssessmentStatus.INSUFFICIENT_DATA
     assert res_insufficient.referral_reason == "LAB_FINDINGS_INSUFFICIENT"
+    assert res_insufficient.risk_estimate is None
 
 
 def test_risk_engine_validation_errors():
@@ -220,8 +327,8 @@ def test_risk_engine_reproducibility():
     assert res1.model_dump() == res2.model_dump()
 
 
-def test_api_risk_assess_endpoint(client: TestClient, db_session: Session):
-    """API Integration: POST /api/v1/risk/assess with valid auth token."""
+def test_api_risk_assess_endpoint_with_residual_risk(client: TestClient, db_session: Session):
+    """API Integration: POST /api/v1/risk/assess with residual carrier probability."""
     seed_database(db_session)
 
     login_resp = client.post(
@@ -237,7 +344,8 @@ def test_api_risk_assess_endpoint(client: TestClient, db_session: Session):
         "gene_symbol": "HBB",
         "inheritance_pattern": "AUTOSOMAL_RECESSIVE",
         "partner_1_finding": "CARRIER_DETECTED",
-        "partner_2_finding": "CARRIER_DETECTED",
+        "partner_2_finding": "NO_VARIANT_DETECTED",
+        "partner_2_residual_carrier_probability": 0.01,
         "findings_sufficient": True,
         "is_clinician_reviewed": True,
     }
@@ -245,12 +353,12 @@ def test_api_risk_assess_endpoint(client: TestClient, db_session: Session):
     assert resp.status_code == 200
     data = resp.json()
     assert data["assessment_status"] == "EDUCATIONAL_RESULT"
-    assert data["risk_estimate"]["affected_probability"] == 0.25
-    assert data["rule_version"] == "v1.0.0-ar-deterministic"
+    assert data["risk_estimate"]["affected_probability"] == 0.0025
+    assert data["risk_estimate"]["residual_carrier_probability_used"] == 0.01
 
 
 def test_api_risk_cases_with_and_without_partner_consent(client: TestClient, db_session: Session):
-    """API Integration: GET /api/v1/risk/cases/{case_id} checks partner consent."""
+    """API Integration: GET /api/v1/risk/cases/{case_id} checks partner consent and accepts residual risk."""
     seed_database(db_session)
 
     login_a = client.post(
@@ -260,13 +368,14 @@ def test_api_risk_cases_with_and_without_partner_consent(client: TestClient, db_
     token_a = login_a.json()["access_token"]
     headers_a = {"Authorization": f"Bearer {token_a}"}
 
-    # Case 1 (Patient A) without partner case: Single carrier assessment
+    # Case 1 (Patient A) without partner case: Single carrier assessment (untested partner -> INSUFFICIENT_DATA)
     resp_single = client.get(
         "/api/v1/risk/cases/1?condition_code=HBB_BETA_THAL",
         headers=headers_a,
     )
     assert resp_single.status_code == 200
     assert resp_single.json()["assessment_status"] == "INSUFFICIENT_DATA"
+    assert resp_single.json()["risk_estimate"] is None
 
     # Case 1 with partner Case 2 (Patient B) WITHOUT consent: 403 CONSENT_REQUIRED
     resp_no_consent = client.get(
@@ -287,10 +396,21 @@ def test_api_risk_cases_with_and_without_partner_consent(client: TestClient, db_
     db_session.add(grant)
     db_session.commit()
 
-    # Now assess with partner Case 2: Succeeds and calculates joint status
-    resp_consented = client.get(
+    # Now assess with partner Case 2 without residual risk: INSUFFICIENT_DATA with risk_estimate=None
+    resp_consented_no_r = client.get(
         "/api/v1/risk/cases/1?condition_code=HBB_BETA_THAL&partner_case_id=2",
         headers=headers_a,
     )
-    assert resp_consented.status_code == 200
-    assert resp_consented.json()["assessment_status"] == "EDUCATIONAL_RESULT"
+    assert resp_consented_no_r.status_code == 200
+    assert resp_consented_no_r.json()["assessment_status"] == "INSUFFICIENT_DATA"
+    assert resp_consented_no_r.json()["risk_estimate"] is None
+
+    # Now assess with partner Case 2 WITH validated residual risk r = 0.01:
+    resp_consented_with_r = client.get(
+        "/api/v1/risk/cases/1?condition_code=HBB_BETA_THAL&partner_case_id=2&partner_residual_carrier_probability=0.01",
+        headers=headers_a,
+    )
+    assert resp_consented_with_r.status_code == 200
+    data_with_r = resp_consented_with_r.json()
+    assert data_with_r["assessment_status"] == "EDUCATIONAL_RESULT"
+    assert data_with_r["risk_estimate"]["affected_probability"] == 0.0025

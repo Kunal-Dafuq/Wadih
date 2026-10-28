@@ -42,6 +42,9 @@ def assess_risk_from_case(
     partner_case_id: Optional[int] = Query(
         None, description="Optional partner case ID (requires active partner consent grant)"
     ),
+    partner_residual_carrier_probability: Optional[float] = Query(
+        None, description="Validated residual carrier probability for negative-screening partner (0.0 < r < 1.0)"
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -57,4 +60,5 @@ def assess_risk_from_case(
         condition_code=condition_code,
         user=current_user,
         partner_case_id=partner_case_id,
+        partner_residual_carrier_probability=partner_residual_carrier_probability,
     )

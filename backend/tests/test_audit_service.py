@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 from app.services.audit_service import AuditService
 from app.models.audit import AuditLog
+from app.models.user import User, UserRole
 from app.seed.seed_demo import seed_database, DEMO_PASSWORD
 
 
@@ -98,3 +99,120 @@ def test_consent_grant_and_revoke_logged_in_audit(client: TestClient, db_session
     )
     assert revoke_log is not None
     assert revoke_log.outcome == "SUCCESS"
+
+
+def test_counsellor_least_privilege_audit_scoping(client: TestClient, db_session: Session):
+    """Least Privilege: Counsellors can only view audit logs for assigned cases/participants.
+
+    Admins have global visibility.
+    """
+    from app.core.security import hash_password
+    seed_database(db_session)
+
+    # Create Admin user
+    admin_user = User(
+        email="admin@wadih.demo",
+        hashed_password=hash_password(DEMO_PASSWORD),
+        role=UserRole.ADMIN,
+        is_active=True,
+    )
+    db_session.add(admin_user)
+    db_session.commit()
+
+    # 1. Log an event for an assigned participant/case (Patient A, Case 1, Referral 1)
+    AuditService.log_event(
+        db=db_session,
+        action="ASSIGNED_CASE_EVENT",
+        resource_type="screening_case",
+        resource_id="1",
+        actor_user_id=1,
+        outcome="SUCCESS",
+        details={"note": "Assigned case event"},
+    )
+
+    # 2. Log an event for an unassigned patient/case (User 99, Case 99)
+    AuditService.log_event(
+        db=db_session,
+        action="UNASSIGNED_CASE_EVENT",
+        resource_type="screening_case",
+        resource_id="999",
+        actor_user_id=999,
+        outcome="SUCCESS",
+        details={"note": "Unassigned case event"},
+    )
+
+    # 3. Login as Counsellor (User 3, assigned to Case 1)
+    login_c = client.post(
+        "/api/v1/auth/login",
+        json={"email": "counsellor@wadih.demo", "password": DEMO_PASSWORD},
+    )
+    headers_c = {"Authorization": f"Bearer {login_c.json()['access_token']}"}
+
+    counsellor_resp = client.get("/api/v1/audit/events", headers=headers_c)
+    assert counsellor_resp.status_code == 200
+    c_events = counsellor_resp.json()["events"]
+    c_actions = [e["action"] for e in c_events]
+
+    assert "ASSIGNED_CASE_EVENT" in c_actions
+    assert "UNASSIGNED_CASE_EVENT" not in c_actions
+
+    # 4. Login as Admin (full visibility)
+    login_admin = client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@wadih.demo", "password": DEMO_PASSWORD},
+    )
+    headers_admin = {"Authorization": f"Bearer {login_admin.json()['access_token']}"}
+
+    admin_resp = client.get("/api/v1/audit/events", headers=headers_admin)
+    assert admin_resp.status_code == 200
+    admin_events = admin_resp.json()["events"]
+    admin_actions = [e["action"] for e in admin_events]
+
+    assert "ASSIGNED_CASE_EVENT" in admin_actions
+    assert "UNASSIGNED_CASE_EVENT" in admin_actions
+
+
+def test_transactional_atomic_rollback_on_audit_failure(db_session: Session, monkeypatch):
+    """Transactional Consistency: If audit logging fails, the business action is rolled back.
+
+    No orphan consent grant or escalation should exist in the database.
+    """
+    from app.services.consent_service import ConsentService
+    from app.schemas.consent import ConsentGrantCreateRequest
+    from app.models.consent import ConsentGrant
+    from app.models.user import User, UserRole
+
+    user_a = User(id=10, email="user.a@demo.com", hashed_password="dummy_hash", role=UserRole.PATIENT)
+    user_b = User(id=11, email="user.b@demo.com", hashed_password="dummy_hash", role=UserRole.PATIENT)
+    db_session.add_all([user_a, user_b])
+    db_session.commit()
+
+    req = ConsentGrantCreateRequest(
+        grantee_user_id=11,
+        scope="summary_only",
+        purpose="preconception_carrier_screening",
+    )
+
+    # Monkeypatch log_event to simulate database error or failure
+    def failing_log_event(*args, **kwargs):
+        raise RuntimeError("Simulated audit write failure")
+
+    monkeypatch.setattr(AuditService, "log_event", failing_log_event)
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="Simulated audit write failure"):
+        try:
+            ConsentService.create_consent_grant(db=db_session, granter=user_a, request_data=req)
+        except Exception:
+            db_session.rollback()
+            raise
+
+    # Verify no grant was persisted
+    saved_grant = (
+        db_session.query(ConsentGrant)
+        .filter(ConsentGrant.granter_user_id == 10, ConsentGrant.grantee_user_id == 11)
+        .first()
+    )
+    assert saved_grant is None
+
