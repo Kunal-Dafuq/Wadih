@@ -392,6 +392,7 @@ def test_api_risk_cases_with_and_without_partner_consent(client: TestClient, db_
         scope=ConsentScope.SUMMARY_ONLY.value,
         status=ConsentStatus.GRANTED.value,
         purpose="preconception_carrier_screening",
+        case_id=2,
     )
     db_session.add(grant)
     db_session.commit()
@@ -462,6 +463,7 @@ def test_secure_post_risk_assessment_endpoint_and_provenance(client: TestClient,
         scope=ConsentScope.SUMMARY_ONLY.value,
         status=ConsentStatus.GRANTED.value,
         purpose="preconception_carrier_screening",
+        case_id=2,
     )
     db_session.add(grant)
     db_session.commit()

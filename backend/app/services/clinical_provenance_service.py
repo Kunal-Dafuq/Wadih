@@ -26,37 +26,40 @@ class ClinicalProvenanceService:
     ) -> bool:
         """Verify whether a counsellor is authorized to manage a case or a linked couple referral.
 
-        Authoritative relationship checks:
-        1. Direct Case Referral:
-           A ReferralTask exists where assigned_counsellor_id == counsellor_id,
-           status != CANCELLED, and (case_id == case.id OR participant_user_id == case.owner_user_id).
-        2. Authorized Couple-Level Referral:
-           The target case's owner has granted active, unrevoked, unexpired consent
-           to a partner participant for whom this counsellor holds an active ReferralTask.
+        AUTHORIZATION POLICIES (Least Privilege & Explicit Scoping):
+        1. Exact Direct Case Assignment:
+           The counsellor holds an active ReferralTask explicitly assigned to target_case.id.
+           A referral for one case owned by a participant does NOT authorize unrelated cases
+           owned by the same participant.
+        2. Explicit Couple-Level Referral Assignment:
+           The counsellor holds an active ReferralTask for a reproductive partner participant,
+           AND the target case owner has issued an active, explicit ConsentGrant specifically
+           binding to target_case.id (unscoped/null case_id grants are strictly rejected).
+           The consent purpose must explicitly cover preconception or carrier screening.
+        3. Fail-Closed:
+           Any missing, unscoped, ambiguous, expired, revoked, cancelled, or mismatched
+           permissions fail closed (returns False).
         """
         from app.models.referral import ReferralTask, ReferralStatus
         from app.models.consent import ConsentGrant, ConsentStatus
         from sqlalchemy import or_
 
-        # 1. Direct referral on this case or its owner
+        # 1. Exact Direct Case Assignment:
+        # Referral must explicitly match case.id directly (cannot match by participant_id alone)
         direct_referral = (
             db.query(ReferralTask)
             .filter(
                 ReferralTask.assigned_counsellor_id == counsellor_id,
+                ReferralTask.case_id == case.id,
                 ReferralTask.status != ReferralStatus.CANCELLED,
-                or_(
-                    ReferralTask.case_id == case.id,
-                    ReferralTask.participant_user_id == case.owner_user_id,
-                ),
             )
             .first()
         )
         if direct_referral:
             return True
 
-        # 2. Couple-level referral relationship:
-        # Counsellor must have an active referral for a participant who is partnered
-        # with the target case owner via an active ConsentGrant.
+        # 2. Explicit Couple-Level Referral Relationship:
+        # Counsellor must have an active referral for a partner participant
         counsellor_referrals = (
             db.query(ReferralTask)
             .filter(
@@ -73,20 +76,36 @@ class ClinicalProvenanceService:
             return False
 
         now = datetime.now(timezone.utc)
-        # Target case owner MUST have granted active consent to the partnered participant
+        # Authoritative couple-level check:
+        # - Target case owner MUST be the granter
+        # - Grantee MUST be one of the partnered participants on the counsellor's active referrals
+        # - CRITICAL: case_id MUST explicitly match case.id (unscoped grants with case_id=None are rejected)
+        # - Status must be GRANTED, not revoked, and not expired
         authorized_grant = (
             db.query(ConsentGrant)
             .filter(
                 ConsentGrant.granter_user_id == case.owner_user_id,
                 ConsentGrant.grantee_user_id.in_(partner_user_ids),
+                ConsentGrant.case_id == case.id,  # Strict target-case binding required!
                 ConsentGrant.status == ConsentStatus.GRANTED.value,
                 ConsentGrant.revoked_at.is_(None),
                 or_(ConsentGrant.expires_at.is_(None), ConsentGrant.expires_at > now),
-                or_(ConsentGrant.case_id.is_(None), ConsentGrant.case_id == case.id),
             )
             .first()
         )
-        return authorized_grant is not None
+        if not authorized_grant:
+            return False
+
+        # Verify purpose covers preconception/carrier screening
+        valid_purposes = [
+            "preconception_carrier_screening",
+            "carrier_screening",
+            "reproductive_risk_assessment",
+        ]
+        if authorized_grant.purpose and authorized_grant.purpose.strip().lower() not in valid_purposes:
+            return False
+
+        return True
 
     @staticmethod
     def record_provenance(
