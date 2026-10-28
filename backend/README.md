@@ -100,6 +100,18 @@ Supported error codes:
 | `GET` | `/api/v1/referrals/{referral_id}` | Yes | Referral details and counsellor notes |
 | `PATCH` | `/api/v1/referrals/{referral_id}/status` | Yes | Update status (PENDING, SCHEDULED, COMPLETED, CANCELLED) |
 | `POST` | `/api/v1/referrals/{referral_id}/notes` | Yes (Counsellor) | Author clinical/counselling session note |
+| `POST` | `/api/v1/risk/assess` | Yes | Calculate deterministic Mendelian recurrence risk |
+| `GET` | `/api/v1/risk/cases/{case_id}` | Yes | Risk calculation from stored case (enforcing partner consent) |
+| `POST` | `/api/v1/consents` | Yes | Create granular consent grant (carrier_status_only, summary_only, full_report) |
+| `GET` | `/api/v1/consents` | Yes | List active and historical consent grants for user |
+| `GET` | `/api/v1/consents/{consent_id}` | Yes | Consent grant detail (granter/grantee restricted) |
+| `POST` | `/api/v1/consents/{consent_id}/approve` | Yes | Explicitly approve pending consent request (granter only) |
+| `POST` | `/api/v1/consents/{consent_id}/revoke` | Yes | Immediately revoke consent grant |
+| `POST` | `/api/v1/sharing/requests` | Yes | Create partner sharing invitation request (PENDING) |
+| `GET` | `/api/v1/sharing/shared-cases/{case_id}` | Yes | Access shared findings strictly filtered by granted scope |
+| `GET` | `/api/v1/audit/events` | Yes (Admin/Counsellor) | Inspect immutable security audit events (sanitized) |
+| `POST` | `/api/v1/counselling/escalations` | Yes | Clinically escalate case to genetic counselling |
+| `GET` | `/api/v1/counselling/escalations/check/{case_id}` | Yes | Deterministic escalation trigger scanner for case findings |
 
 ---
 

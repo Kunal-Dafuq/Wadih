@@ -1,17 +1,24 @@
 from fastapi import APIRouter, Depends
-from app.api.v1 import auth, users, cases, education, referrals
+from app.api.v1 import auth, users, cases, education, referrals, risk, consents, sharing, audit, counselling
 from app.schemas.auth import CurrentUserResponse
 from app.models.user import User
 from app.api.dependencies import get_current_user
 
 api_router = APIRouter()
 
-# Mount all v1 modular routers
+# Foundational modular routers (Kunal)
 api_router.include_router(auth.router)
 api_router.include_router(users.router)
 api_router.include_router(cases.router)
 api_router.include_router(education.router)
 api_router.include_router(referrals.router)
+
+# Advanced backend modular routers (Niharika)
+api_router.include_router(risk.router)
+api_router.include_router(consents.router)
+api_router.include_router(sharing.router)
+api_router.include_router(audit.router)
+api_router.include_router(counselling.router)
 
 
 @api_router.get("/me", response_model=CurrentUserResponse, tags=["Authentication"])

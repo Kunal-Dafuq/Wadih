@@ -1,0 +1,216 @@
+"""Deterministic genetic-risk calculation engine.
+
+Validates structured inputs, enforces clinical-safety guardrails, and evaluates
+inheritance probabilities using versioned deterministic rule sets.
+"""
+
+from typing import Optional, List
+from sqlalchemy.orm import Session
+
+from app.schemas.genetic_risk import (
+    InheritancePattern,
+    ScreeningInterpretation,
+    AssessmentStatus,
+    RiskAssessmentRequest,
+    RiskAssessmentResponse,
+)
+from app.services.inheritance_rules import (
+    RULE_VERSION,
+    STANDARD_LIMITATIONS,
+    evaluate_autosomal_recessive_case,
+)
+from app.models.user import User, UserRole
+from app.models.screening_case import ScreeningCase, SyntheticFinding
+from app.models.consent import ConsentGrant, ConsentStatus, ConsentScope
+from app.core.exceptions import (
+    ValidationException,
+    NotFoundException,
+    ConsentRequiredException,
+    ForbiddenException,
+)
+
+
+class RiskEngineService:
+    @staticmethod
+    def assess_risk(request: RiskAssessmentRequest) -> RiskAssessmentResponse:
+        """Evaluate deterministic genetic risk from a validated structured request."""
+        # 1. Input Validation Guardrails
+        if not request.condition_code or not request.condition_code.strip():
+            raise ValidationException("Condition code must not be empty.")
+
+        if not request.condition_name or not request.condition_name.strip():
+            raise ValidationException("Condition name must not be empty.")
+
+        # 2. Inheritance pattern guardrail
+        if request.inheritance_pattern != InheritancePattern.AUTOSOMAL_RECESSIVE:
+            return RiskAssessmentResponse(
+                case_id=request.case_id,
+                condition=request.condition_name,
+                condition_code=request.condition_code,
+                gene=request.gene_symbol,
+                inheritance_pattern=request.inheritance_pattern,
+                assessment_status=AssessmentStatus.UNSUPPORTED_INHERITANCE_PATTERN,
+                risk_estimate=None,
+                explanation=(
+                    f"The inheritance mode '{request.inheritance_pattern.value}' for {request.condition_name} "
+                    "is not supported by this deterministic educational model. Non-recessive inheritance patterns "
+                    "(e.g., dominant, X-linked, mitochondrial, or multifactorial) involve complex clinical considerations "
+                    "such as variable expressivity, incomplete penetrance, or sex-linked segregation, which require "
+                    "individualized evaluation by a certified genetics specialist."
+                ),
+                limitations=STANDARD_LIMITATIONS
+                + [f"Inheritance pattern {request.inheritance_pattern.value} requires specialized clinical counselling."],
+                assumptions=["Model currently supports biallelic autosomal recessive carrier screening calculations."],
+                requires_genetic_counselor=True,
+                referral_reason="UNSUPPORTED_INHERITANCE_PATTERN",
+                rule_version=RULE_VERSION,
+            )
+
+        # 3. Autosomal recessive evaluation
+        (
+            status,
+            risk_est,
+            explanation,
+            limitations,
+            assumptions,
+            requires_counselor,
+            referral_reason,
+        ) = evaluate_autosomal_recessive_case(
+            partner_1_finding=request.partner_1_finding,
+            partner_2_finding=request.partner_2_finding,
+            condition_name=request.condition_name,
+            gene_symbol=request.gene_symbol,
+            findings_sufficient=request.findings_sufficient,
+            is_clinician_reviewed=request.is_clinician_reviewed,
+        )
+
+        return RiskAssessmentResponse(
+            case_id=request.case_id,
+            condition=request.condition_name,
+            condition_code=request.condition_code,
+            gene=request.gene_symbol,
+            inheritance_pattern=request.inheritance_pattern,
+            assessment_status=status,
+            risk_estimate=risk_est,
+            explanation=explanation,
+            limitations=limitations,
+            assumptions=assumptions,
+            requires_genetic_counselor=requires_counselor,
+            referral_reason=referral_reason,
+            rule_version=RULE_VERSION,
+        )
+
+    @staticmethod
+    def assess_from_cases(
+        db: Session,
+        case_1_id: int,
+        condition_code: str,
+        user: User,
+        partner_case_id: Optional[int] = None,
+    ) -> RiskAssessmentResponse:
+        """Assess risk directly from stored synthetic cases in the database, verifying ownership and consent."""
+        # 1. Fetch Primary Case (Case 1)
+        case_1 = db.query(ScreeningCase).filter(ScreeningCase.id == case_1_id).first()
+        if not case_1:
+            raise NotFoundException("Screening case not found.")
+
+        # Object-level authorization for Case 1
+        is_owner = case_1.owner_user_id == user.id
+        is_counsellor = user.role == UserRole.COUNSELLOR
+
+        if not is_owner and not is_counsellor:
+            raise NotFoundException("Screening case not found.")
+
+        # Finding for Case 1
+        finding_1 = (
+            db.query(SyntheticFinding)
+            .filter(
+                SyntheticFinding.case_id == case_1_id,
+                SyntheticFinding.condition_code == condition_code,
+            )
+            .first()
+        )
+        if not finding_1:
+            raise NotFoundException(f"Condition '{condition_code}' not found in primary case findings.")
+
+        # Map Case 1 finding
+        p1_interpretation = RiskEngineService._map_finding_to_interpretation(finding_1)
+        inheritance_mode = RiskEngineService._map_inheritance_mode(finding_1.inheritance_mode)
+
+        # 2. Handle Partner Case (Case 2) if provided
+        p2_interpretation: Optional[ScreeningInterpretation] = None
+        if partner_case_id:
+            case_2 = db.query(ScreeningCase).filter(ScreeningCase.id == partner_case_id).first()
+            if not case_2:
+                raise NotFoundException("Partner screening case not found.")
+
+            # Strict Consent Check: Partner must have granted ACTIVE consent to user
+            if case_2.owner_user_id != user.id and not is_counsellor:
+                active_grant = (
+                    db.query(ConsentGrant)
+                    .filter(
+                        ConsentGrant.granter_user_id == case_2.owner_user_id,
+                        ConsentGrant.grantee_user_id == user.id,
+                        ConsentGrant.status == ConsentStatus.GRANTED.value,
+                    )
+                    .first()
+                )
+                if not active_grant:
+                    raise ConsentRequiredException(
+                        "Access to partner screening data requires an approved consent grant from the partner."
+                    )
+
+            finding_2 = (
+                db.query(SyntheticFinding)
+                .filter(
+                    SyntheticFinding.case_id == partner_case_id,
+                    SyntheticFinding.condition_code == condition_code,
+                )
+                .first()
+            )
+            if finding_2:
+                p2_interpretation = RiskEngineService._map_finding_to_interpretation(finding_2)
+            else:
+                p2_interpretation = ScreeningInterpretation.NO_VARIANT_DETECTED
+
+        req = RiskAssessmentRequest(
+            case_id=case_1.synthetic_case_code,
+            condition_code=finding_1.condition_code,
+            condition_name=finding_1.condition_name,
+            gene_symbol=finding_1.condition_code.split("_")[0] if "_" in finding_1.condition_code else None,
+            inheritance_pattern=inheritance_mode,
+            partner_1_finding=p1_interpretation,
+            partner_2_finding=p2_interpretation,
+            findings_sufficient=True,
+            is_clinician_reviewed=finding_1.reviewed_flag,
+        )
+
+        return RiskEngineService.assess_risk(req)
+
+    @staticmethod
+    def _map_finding_to_interpretation(finding: SyntheticFinding) -> ScreeningInterpretation:
+        """Map database SyntheticFinding fields to ScreeningInterpretation enum."""
+        carrier_str = (finding.carrier_state or "").upper()
+        classification_str = (finding.classification_state or "").upper()
+
+        if "UNCERTAIN" in carrier_str or "VUS" in classification_str:
+            return ScreeningInterpretation.UNCERTAIN_SIGNIFICANCE
+        if "INCONCLUSIVE" in carrier_str:
+            return ScreeningInterpretation.INCONCLUSIVE
+        if "CARRIER" in carrier_str or "PATHOGENIC" in classification_str:
+            return ScreeningInterpretation.CARRIER_DETECTED
+        if "NEGATIVE" in classification_str or "NO_VARIANT" in carrier_str:
+            return ScreeningInterpretation.NO_VARIANT_DETECTED
+        if "AFFECTED" in carrier_str or "POSITIVE_AFFECTED" in classification_str:
+            return ScreeningInterpretation.POSITIVE_AFFECTED
+
+        return ScreeningInterpretation.CARRIER_DETECTED
+
+    @staticmethod
+    def _map_inheritance_mode(mode_str: str) -> InheritancePattern:
+        """Map database string to InheritancePattern enum."""
+        s = (mode_str or "").upper().replace(" ", "_").replace("-", "_")
+        for member in InheritancePattern:
+            if member.value == s:
+                return member
+        return InheritancePattern.UNKNOWN
