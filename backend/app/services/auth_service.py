@@ -1,13 +1,37 @@
 from typing import Optional
 from sqlalchemy.orm import Session
 
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.core.security import verify_password, create_access_token, blacklist_token
-from app.core.exceptions import UnauthenticatedException
+from app.core.exceptions import UnauthenticatedException, ValidationException, ForbiddenException
 from app.schemas.auth import TokenResponse, CurrentUserResponse
 
 
 class AuthService:
+    DEMO_PERSONAS = {
+        "patient_a": "patient.a@wadih.demo",
+        "patient_b": "patient.b@wadih.demo",
+        "counsellor": "counsellor@wadih.demo",
+    }
+
+    @classmethod
+    def authenticate_demo_persona(cls, db: Session, persona: str) -> User:
+        """Safely authenticate a synthetic demonstration persona without requiring exposed passwords."""
+        clean_key = (persona or "").lower().strip()
+        email = cls.DEMO_PERSONAS.get(clean_key)
+        if not email:
+            raise ValidationException(
+                "Invalid demo persona. Supported synthetic demonstration personas: 'patient_a', 'patient_b', 'counsellor'."
+            )
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            raise UnauthenticatedException(f"Demo account for persona '{clean_key}' not found.")
+        if not user.is_active:
+            raise UnauthenticatedException("Demo persona account is deactivated.")
+        if user.role == UserRole.ADMIN:
+            raise ForbiddenException("Administrator accounts are not permitted for demonstration sessions.")
+        return user
+
     @staticmethod
     def authenticate_user(db: Session, email: str, password: str) -> User:
         """Verify user credentials and return active user, or raise UnauthenticatedException."""

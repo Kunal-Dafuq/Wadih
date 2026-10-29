@@ -157,6 +157,8 @@ export interface RiskAssessment {
   requires_genetic_counselor: boolean;
   referral_reason: string | null;
   rule_version: string;
+  is_educational_simulation?: boolean;
+  is_authoritative_clinical_record?: boolean;
   disclaimer: string;
 }
 

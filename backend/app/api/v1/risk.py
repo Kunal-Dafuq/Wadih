@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.user import User
 from app.api.dependencies import get_current_user
+from app.core.exceptions import ValidationException
 from app.schemas.genetic_risk import (
     RiskAssessmentRequest,
     RiskAssessmentResponse,
@@ -18,21 +19,28 @@ router = APIRouter(prefix="/risk", tags=["Genetic Risk Engine"])
 @router.post(
     "/assess",
     response_model=RiskAssessmentResponse,
-    summary="Calculate deterministic genetic risk and Mendelian recurrence probabilities",
+    summary="Calculate deterministic genetic risk for educational scenario simulation",
 )
 def assess_genetic_risk(
     request: RiskAssessmentRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Deterministic, testable risk calculation based on versioned Mendelian rules.
+    """Educational scenario simulator for deterministic Mendelian recurrence probabilities.
 
-    Supports:
-    - Autosomal recessive cross-carrier calculations (25% affected, 50% carrier, 25% non-carrier).
-    - Single-carrier status with negative or missing partner data.
-    - Negative screening scope explanations.
-    - Clinical-safety escalation for VUS, inconclusive, or unsupported inheritance modes.
+    SAFETY & BOUNDARY ENFORCEMENT:
+    - This generic endpoint is strictly an educational 'what if' calculator for hypothetical scenarios.
+    - Supplying a case_id is strictly rejected to prevent confusing hypothetical simulations with
+      authoritative patient screening cases or bypassing case-level clinical provenance checks.
+    - Stored case assessments MUST use POST /api/v1/risk/cases/{case_id}/assess, which enforces
+      case ownership, partner consent grants, and certified clinical provenance records.
     """
-    return RiskEngineService.assess_risk(request)
+    if request.case_id is not None and str(request.case_id).strip():
+        raise ValidationException(
+            "The generic /risk/assess endpoint is an educational simulator for hypothetical scenarios "
+            "and does not evaluate patient screening cases. For authoritative case-linked screening "
+            "assessments, call POST /api/v1/risk/cases/{case_id}/assess."
+        )
+    return RiskEngineService.assess_risk(request, is_educational_simulation=True)
 
 
 @router.post(

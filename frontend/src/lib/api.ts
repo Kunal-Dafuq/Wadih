@@ -109,6 +109,7 @@ const enc = encodeURIComponent;
 export const api = {
   // Auth
   login: (email: string, password: string) => request<TokenResponse>('POST', '/auth/login', { email, password }),
+  demoSession: (persona: string) => request<TokenResponse>('POST', '/auth/demo-session', { persona }),
   logout: () => request<{ message: string }>('POST', '/auth/logout'),
   me: () => request<CurrentUser>('GET', '/me'),
 

@@ -131,6 +131,14 @@ class RiskAssessmentResponse(BaseModel):
     )
     referral_reason: Optional[str] = Field(None, description="Structured referral or escalation trigger code")
     rule_version: str = Field(..., description="Version identifier of deterministic calculation rule set")
+    is_educational_simulation: bool = Field(
+        True,
+        description="Whether this assessment is a hypothetical educational scenario calculation rather than an authoritative patient record assessment",
+    )
+    is_authoritative_clinical_record: bool = Field(
+        False,
+        description="Whether this assessment evaluates an authoritative, verified clinical screening record in the database",
+    )
     disclaimer: str = Field(
         default=(
             "Educational and demonstration assessment only. This calculation uses synthetic genetic screening scenarios "

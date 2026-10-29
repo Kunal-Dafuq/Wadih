@@ -7,6 +7,10 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=6, json_schema_extra={"example": "DemoPassword123!"})
 
 
+class DemoSessionRequest(BaseModel):
+    persona: str = Field(..., description="Synthetic demo persona ('patient_a', 'patient_b', 'counsellor')")
+
+
 class CurrentUserResponse(BaseModel):
     id: int
     email: str

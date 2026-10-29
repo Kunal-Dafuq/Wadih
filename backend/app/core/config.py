@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import List, Union, Optional
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -29,11 +29,13 @@ class Settings(BaseSettings):
 
     # CORS
     ALLOWED_ORIGINS: Union[List[str], str] = [
+        "https://frontend-five-psi-43.vercel.app",
         "http://localhost:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "https://frontend-five-psi-43.vercel.app",
     ]
+    # Restrict preview regex in production: Only applied when explicitly approved via environment
+    ALLOWED_ORIGIN_REGEX: Optional[str] = None
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod

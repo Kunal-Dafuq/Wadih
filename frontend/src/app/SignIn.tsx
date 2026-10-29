@@ -5,15 +5,15 @@ import { Link, navigate } from '../lib/router';
 import { Logo } from '../components/landing/icons';
 import { Button, ErrorNote, Field } from './ui';
 
-// Accounts created by the backend seed script (backend/app/seed/seed_demo.py).
-const DEMO_ACCOUNTS = [
-  { email: 'patient.a@wadih.demo', label: 'Patient A' },
-  { email: 'patient.b@wadih.demo', label: 'Patient B' },
-  { email: 'counsellor@wadih.demo', label: 'Counsellor' },
+// Safe synthetic demonstration personas supported by POST /api/v1/auth/demo-session.
+const DEMO_PERSONAS = [
+  { persona: 'patient_a', label: 'Patient A (Carrier)' },
+  { persona: 'patient_b', label: 'Patient B (Partner)' },
+  { persona: 'counsellor', label: 'Dr. Chen (Counsellor)' },
 ];
 
 export function SignIn() {
-  const { login } = useAuth();
+  const { login, demoLogin } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [pending, setPending] = useState(false);
@@ -28,6 +28,19 @@ export function SignIn() {
       navigate('/app', { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? err : new ApiError(0, 'INTERNAL_ERROR', 'Sign in failed.'));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const launchDemo = async (persona: string) => {
+    setPending(true);
+    setError(null);
+    try {
+      await demoLogin(persona);
+      navigate('/app', { replace: true });
+    } catch (err) {
+      setError(err instanceof ApiError ? err : new ApiError(0, 'INTERNAL_ERROR', 'Demo sign-in failed.'));
     } finally {
       setPending(false);
     }
@@ -73,10 +86,16 @@ export function SignIn() {
         </Button>
 
         <div className="demo-accounts">
-          <span className="field-hint">Demo accounts (password is in the backend README):</span>
+          <span className="field-hint">Instant demo access (least-privilege synthetic personas):</span>
           <div className="chip-row">
-            {DEMO_ACCOUNTS.map((a) => (
-              <button type="button" key={a.email} className="chip" onClick={() => setEmail(a.email)}>
+            {DEMO_PERSONAS.map((a) => (
+              <button
+                type="button"
+                key={a.persona}
+                className="chip"
+                disabled={pending}
+                onClick={() => launchDemo(a.persona)}
+              >
                 {a.label}
               </button>
             ))}

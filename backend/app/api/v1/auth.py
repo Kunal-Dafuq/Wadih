@@ -3,11 +3,27 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.auth import LoginRequest, TokenResponse, CurrentUserResponse, LogoutResponse
+from app.schemas.auth import (
+    LoginRequest,
+    DemoSessionRequest,
+    TokenResponse,
+    CurrentUserResponse,
+    LogoutResponse,
+)
 from app.services.auth_service import AuthService
 from app.api.dependencies import get_current_user, get_token_from_header
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+
+@router.post("/demo-session", response_model=TokenResponse)
+def create_demo_session(
+    payload: DemoSessionRequest,
+    db: Session = Depends(get_db),
+):
+    """Launch a safe, least-privilege synthetic demonstration session for evaluators."""
+    user = AuthService.authenticate_demo_persona(db, payload.persona)
+    return AuthService.create_token_for_user(user)
 
 
 @router.post("/login", response_model=TokenResponse)

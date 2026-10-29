@@ -32,7 +32,10 @@ from app.core.exceptions import (
 
 class RiskEngineService:
     @staticmethod
-    def assess_risk(request: RiskAssessmentRequest) -> RiskAssessmentResponse:
+    def assess_risk(
+        request: RiskAssessmentRequest,
+        is_educational_simulation: Optional[bool] = None,
+    ) -> RiskAssessmentResponse:
         """Evaluate deterministic genetic risk from a validated structured request."""
         # 1. Input Validation Guardrails
         if not request.condition_code or not request.condition_code.strip():
@@ -40,6 +43,24 @@ class RiskEngineService:
 
         if not request.condition_name or not request.condition_name.strip():
             raise ValidationException("Condition name must not be empty.")
+
+        if is_educational_simulation is None:
+            is_educational_simulation = (request.case_id is None)
+
+        bound_case_id = None if is_educational_simulation else request.case_id
+
+        if is_educational_simulation:
+            disclaimer_text = (
+                "Hypothetical educational simulation only. This calculation uses demonstration scenario parameters "
+                "and standard Mendelian arithmetic. It does NOT evaluate, verify, or represent any patient's actual "
+                "clinical screening record. For verified clinical results, view the authoritative case assessment."
+            )
+        else:
+            disclaimer_text = (
+                "Educational and demonstration assessment for clinical screening case. This calculation uses verified "
+                "synthetic findings and standard Mendelian probability models. It does not constitute medical diagnosis "
+                "or a guarantee of any child's health outcome. Consult a certified genetic counsellor for personalized pre-conception guidance."
+            )
 
         # Residual carrier probability validations
         if request.partner_1_residual_carrier_probability is not None:
@@ -59,7 +80,7 @@ class RiskEngineService:
         # 2. Inheritance pattern guardrail
         if request.inheritance_pattern != InheritancePattern.AUTOSOMAL_RECESSIVE:
             return RiskAssessmentResponse(
-                case_id=request.case_id,
+                case_id=bound_case_id,
                 condition=request.condition_name,
                 condition_code=request.condition_code,
                 gene=request.gene_symbol,
@@ -79,6 +100,9 @@ class RiskEngineService:
                 requires_genetic_counselor=True,
                 referral_reason="UNSUPPORTED_INHERITANCE_PATTERN",
                 rule_version=RULE_VERSION,
+                is_educational_simulation=is_educational_simulation,
+                is_authoritative_clinical_record=not is_educational_simulation,
+                disclaimer=disclaimer_text,
             )
 
         # 3. Autosomal recessive evaluation
@@ -104,7 +128,7 @@ class RiskEngineService:
         )
 
         return RiskAssessmentResponse(
-            case_id=request.case_id,
+            case_id=bound_case_id,
             condition=request.condition_name,
             condition_code=request.condition_code,
             gene=request.gene_symbol,
@@ -118,6 +142,9 @@ class RiskEngineService:
             requires_genetic_counselor=requires_counselor,
             referral_reason=referral_reason,
             rule_version=RULE_VERSION,
+            is_educational_simulation=is_educational_simulation,
+            is_authoritative_clinical_record=not is_educational_simulation,
+            disclaimer=disclaimer_text,
         )
 
     @staticmethod
@@ -275,7 +302,7 @@ class RiskEngineService:
             is_clinician_reviewed=both_reviewed,
         )
 
-        return RiskEngineService.assess_risk(req)
+        return RiskEngineService.assess_risk(req, is_educational_simulation=False)
 
     @staticmethod
     def _map_finding_to_interpretation(finding: SyntheticFinding) -> ScreeningInterpretation:

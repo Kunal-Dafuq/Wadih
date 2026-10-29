@@ -14,6 +14,7 @@ interface AuthState {
   user: CurrentUser | null;
   status: 'restoring' | 'signed-in' | 'signed-out';
   login: (email: string, password: string) => Promise<CurrentUser>;
+  demoLogin: (persona: string) => Promise<CurrentUser>;
   logout: () => Promise<void>;
 }
 
@@ -77,6 +78,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return res.user;
   }, []);
 
+  const demoLogin = useCallback(async (persona: string) => {
+    const res = await api.demoSession(persona);
+    setToken(res.access_token);
+    writeSession({ token: res.access_token, user: res.user });
+    setUser(res.user);
+    setStatus('signed-in');
+    return res.user;
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await api.logout();
@@ -86,7 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clear();
   }, [clear]);
 
-  const value = useMemo(() => ({ user, status, login, logout }), [user, status, login, logout]);
+  const value = useMemo(() => ({ user, status, login, demoLogin, logout }), [user, status, login, demoLogin, logout]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
