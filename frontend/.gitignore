@@ -4,3 +4,6 @@ dist/
 
 # The repo-root .gitignore ignores Python `lib/` directories; keep the frontend source lib.
 !src/lib/
+
+# Local Vercel project link metadata
+.vercel/
