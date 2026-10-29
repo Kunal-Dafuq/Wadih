@@ -1,6 +1,7 @@
 """Database seeder for demo accounts, synthetic screening cases, and educational content."""
 
 from sqlalchemy.orm import Session
+from app.db.base import Base  # Ensure Base is initialized before models
 from app.db.session import SessionLocal
 from app.models.user import User, UserRole
 from app.models.participant import ParticipantProfile

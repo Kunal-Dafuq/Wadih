@@ -12,6 +12,16 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "sqlite:///./wadih_dev.db"
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def assemble_database_url(cls, v: str) -> str:
+        if isinstance(v, str):
+            if v.startswith("postgres://"):
+                return v.replace("postgres://", "postgresql+psycopg2://", 1)
+            elif v.startswith("postgresql://") and not v.startswith("postgresql+"):
+                return v.replace("postgresql://", "postgresql+psycopg2://", 1)
+        return v
+
     # Security
     SECRET_KEY: str = "development_secret_key_change_in_production"
     ALGORITHM: str = "HS256"
