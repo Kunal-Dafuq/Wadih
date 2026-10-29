@@ -158,7 +158,10 @@ export interface RiskAssessment {
   referral_reason: string | null;
   rule_version: string;
   is_educational_simulation?: boolean;
+  is_case_linked_assessment?: boolean;
   is_authoritative_clinical_record?: boolean;
+  is_synthetic_sandbox?: boolean;
+  clinician_confirmed_provenance?: boolean;
   disclaimer: string;
 }
 

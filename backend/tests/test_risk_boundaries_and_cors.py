@@ -91,7 +91,9 @@ def test_generic_risk_assess_educational_simulation_flags(client: TestClient, db
 
 
 def test_case_linked_risk_assessment_authoritative_flags(client: TestClient, db_session: Session):
-    """Verify case-linked endpoint POST /api/v1/risk/cases/{case_id}/assess marks result as authoritative."""
+    """Verify case-linked endpoint POST /api/v1/risk/cases/{case_id}/assess marks result as case-linked,
+    and returns is_authoritative_clinical_record=False when data is insufficient.
+    """
     seed_database(db_session)
     login_resp = client.post(
         "/api/v1/auth/demo-session",
@@ -107,8 +109,12 @@ def test_case_linked_risk_assessment_authoritative_flags(client: TestClient, db_
     assert resp.status_code == 200
     data = resp.json()
     assert data["case_id"] == "SYN-CASE-101"
+    assert data["is_case_linked_assessment"] is True
     assert data["is_educational_simulation"] is False
-    assert data["is_authoritative_clinical_record"] is True
+    # Insufficient data (unlinked partner) cannot constitute an authoritative clinical record
+    assert data["is_authoritative_clinical_record"] is False
+    assert data["assessment_status"] == "INSUFFICIENT_DATA"
+    assert data["risk_estimate"] is None
 
 
 def test_demo_session_authentication_flow(client: TestClient, db_session: Session):

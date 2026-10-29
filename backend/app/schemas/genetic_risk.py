@@ -139,13 +139,21 @@ class RiskAssessmentResponse(BaseModel):
         True,
         description="Whether this assessment is a hypothetical educational scenario calculation rather than an authoritative patient record assessment",
     )
+    is_case_linked_assessment: bool = Field(
+        False,
+        description="Whether this assessment was evaluated against linked clinical screening cases in the database",
+    )
     is_authoritative_clinical_record: bool = Field(
         False,
-        description="Whether this assessment evaluates an authoritative, verified clinical screening record in the database",
+        description="Whether this assessment result is an authoritative clinical record supported by verified, non-synthetic clinical provenance",
     )
     is_synthetic_sandbox: bool = Field(
         False,
         description="Whether this assessment utilizes a synthetic demonstration sandbox record",
+    )
+    clinician_confirmed_provenance: bool = Field(
+        False,
+        description="Whether the residual risk input is verified by a clinician-reviewed laboratory record",
     )
     disclaimer: str = Field(
         default=(

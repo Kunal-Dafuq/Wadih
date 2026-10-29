@@ -188,9 +188,11 @@ def test_demo_provenance_cannot_authorize_authoritative_clinical_assessment(clie
 
     # Authoritative assessment MUST NOT accept synthetic sandbox record as clinical provenance!
     # Provenance is unconfirmed -> numerical recurrence figure is suppressed and residual risk is unverified
+    assert auth_data["is_case_linked_assessment"] is True
     assert auth_data["is_synthetic_sandbox"] is False
     assert auth_data["is_educational_simulation"] is False
-    assert auth_data["is_authoritative_clinical_record"] is True
+    assert auth_data["is_authoritative_clinical_record"] is False
+    assert auth_data["clinician_confirmed_provenance"] is False
     assert auth_data["risk_estimate"] is None
     assert auth_data["assessment_status"] in ("INSUFFICIENT_DATA", "REVIEW_REQUIRED")
 

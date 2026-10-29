@@ -101,7 +101,10 @@ class RiskEngineService:
                 referral_reason="UNSUPPORTED_INHERITANCE_PATTERN",
                 rule_version=RULE_VERSION,
                 is_educational_simulation=is_educational_simulation,
-                is_authoritative_clinical_record=not is_educational_simulation,
+                is_case_linked_assessment=bool(bound_case_id),
+                is_authoritative_clinical_record=False,
+                is_synthetic_sandbox=False,
+                clinician_confirmed_provenance=request.clinician_confirmed_provenance,
                 disclaimer=disclaimer_text,
             )
 
@@ -143,7 +146,10 @@ class RiskEngineService:
             referral_reason=referral_reason,
             rule_version=RULE_VERSION,
             is_educational_simulation=is_educational_simulation,
-            is_authoritative_clinical_record=not is_educational_simulation,
+            is_case_linked_assessment=bool(bound_case_id),
+            is_authoritative_clinical_record=False,
+            is_synthetic_sandbox=False,
+            clinician_confirmed_provenance=request.clinician_confirmed_provenance,
             disclaimer=disclaimer_text,
         )
 
@@ -337,14 +343,34 @@ class RiskEngineService:
 
         is_simulation = simulation_mode or is_sandbox_used
         resp = RiskEngineService.assess_risk(req, is_educational_simulation=is_simulation)
+        resp.is_case_linked_assessment = True
         resp.is_synthetic_sandbox = is_sandbox_used
-        if is_sandbox_used:
+        resp.clinician_confirmed_provenance = final_provenance_confirmed
+
+        if is_simulation or is_sandbox_used:
             resp.is_authoritative_clinical_record = False
-            resp.disclaimer = (
-                "Hypothetical educational demonstration using synthetic sandbox residual risk parameters. "
-                "This calculation does not satisfy authoritative clinical provenance. "
-                "Consult a certified genetic counsellor for personalized pre-conception guidance."
-            )
+            resp.is_educational_simulation = True
+            if is_sandbox_used:
+                resp.disclaimer = (
+                    "Hypothetical educational demonstration using synthetic sandbox residual risk parameters. "
+                    "This calculation does not satisfy authoritative clinical provenance. "
+                    "Consult a certified genetic counsellor for personalized pre-conception guidance."
+                )
+        else:
+            resp.is_educational_simulation = False
+            # Authoritative clinical record criteria:
+            # 1. Evaluated against linked database screening cases (is_case_linked_assessment == True)
+            # 2. Not run in educational simulation mode
+            # 3. Not backed by synthetic sandbox records
+            # 4. If residual risk was required (e.g. single carrier + negative partner), valid non-synthetic clinician provenance is verified
+            # 5. Assessment status must NOT be INSUFFICIENT_DATA and risk_estimate must not be None
+            if resp.assessment_status == AssessmentStatus.INSUFFICIENT_DATA or resp.risk_estimate is None:
+                resp.is_authoritative_clinical_record = False
+            elif is_single_carrier_and_neg and not final_provenance_confirmed:
+                resp.is_authoritative_clinical_record = False
+            else:
+                resp.is_authoritative_clinical_record = True
+
         return resp
 
     @staticmethod
