@@ -33,6 +33,7 @@ def evaluate_autosomal_recessive_case(
     is_clinician_reviewed: bool = True,
     clinician_confirmed_provenance: bool = True,
     residual_risk_source: Optional[str] = None,
+    allow_simulation: bool = False,
 ) -> Tuple[
     AssessmentStatus,
     Optional[RiskProbabilityEstimate],
@@ -211,7 +212,10 @@ def evaluate_autosomal_recessive_case(
             )
 
         # Safety rule: Syntactic validation alone is NOT proof of clinician-reviewed laboratory provenance!
-        if not clinician_confirmed_provenance:
+        # In authoritative mode, clinician_confirmed_provenance is required.
+        # In educational simulation mode, calculations proceed for instructional demonstration,
+        # but clinician_confirmed_provenance remains False.
+        if not clinician_confirmed_provenance and not allow_simulation:
             explanation = (
                 f"One partner was confirmed as a carrier for {condition_name}{gene_display}, while the other partner tested negative on the carrier panel. "
                 f"A numerical residual carrier probability ({neg_partner_r}) was submitted, but lacks confirmed laboratory or clinician provenance. "

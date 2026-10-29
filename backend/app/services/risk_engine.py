@@ -35,6 +35,7 @@ class RiskEngineService:
     def assess_risk(
         request: RiskAssessmentRequest,
         is_educational_simulation: Optional[bool] = None,
+        allow_simulation: bool = False,
     ) -> RiskAssessmentResponse:
         """Evaluate deterministic genetic risk from a validated structured request."""
         # 1. Input Validation Guardrails
@@ -47,7 +48,7 @@ class RiskEngineService:
         if is_educational_simulation is None:
             is_educational_simulation = (request.case_id is None)
 
-        bound_case_id = None if is_educational_simulation else request.case_id
+        bound_case_id = request.case_id
 
         if is_educational_simulation:
             disclaimer_text = (
@@ -128,6 +129,7 @@ class RiskEngineService:
             is_clinician_reviewed=request.is_clinician_reviewed,
             clinician_confirmed_provenance=request.clinician_confirmed_provenance,
             residual_risk_source=request.residual_risk_source,
+            allow_simulation=allow_simulation,
         )
 
         return RiskAssessmentResponse(
@@ -213,6 +215,7 @@ class RiskEngineService:
 
         # 2. Handle Partner Case (Case 2) if provided
         p2_interpretation: Optional[ScreeningInterpretation] = None
+        case_2: Optional[ScreeningCase] = None
         if partner_case_id:
             case_2 = db.query(ScreeningCase).filter(ScreeningCase.id == partner_case_id).first()
             if not case_2:
@@ -298,7 +301,7 @@ class RiskEngineService:
                     # CANNOT satisfy authoritative clinical provenance (only usable in simulation_mode)
                     is_sandbox_used = True
                     final_residual_carrier_prob = trusted_record.residual_carrier_probability
-                    final_provenance_confirmed = True if simulation_mode else False
+                    final_provenance_confirmed = False  # NEVER True for synthetic sandbox
                     final_residual_source = trusted_record.clinical_source_reference
                 else:
                     # If client passed an explicit probability, verify it matches the authoritative clinician record
@@ -326,6 +329,15 @@ class RiskEngineService:
                     final_provenance_confirmed = False
                     final_residual_source = None
 
+        # Check if cases are explicitly identified synthetic demo cases ('SYN-')
+        is_case_1_synthetic = bool(case_1.synthetic_case_code and case_1.synthetic_case_code.startswith("SYN-"))
+        is_case_2_synthetic = (
+            bool(case_2 and case_2.synthetic_case_code and case_2.synthetic_case_code.startswith("SYN-"))
+            if partner_case_id
+            else False
+        )
+        has_synthetic_case = is_case_1_synthetic or is_case_2_synthetic
+
         req = RiskAssessmentRequest(
             case_id=case_1.synthetic_case_code,
             condition_code=finding_1.condition_code,
@@ -342,7 +354,11 @@ class RiskEngineService:
         )
 
         is_simulation = simulation_mode or is_sandbox_used
-        resp = RiskEngineService.assess_risk(req, is_educational_simulation=is_simulation)
+        resp = RiskEngineService.assess_risk(
+            req,
+            is_educational_simulation=is_simulation,
+            allow_simulation=simulation_mode,
+        )
         resp.is_case_linked_assessment = True
         resp.is_synthetic_sandbox = is_sandbox_used
         resp.clinician_confirmed_provenance = final_provenance_confirmed
@@ -356,20 +372,43 @@ class RiskEngineService:
                     "This calculation does not satisfy authoritative clinical provenance. "
                     "Consult a certified genetic counsellor for personalized pre-conception guidance."
                 )
+            else:
+                resp.disclaimer = (
+                    "Educational scenario simulation. Calculations reflect hypothetical teaching models. "
+                    "Consult a certified genetic counsellor for clinical guidance."
+                )
         else:
             resp.is_educational_simulation = False
-            # Authoritative clinical record criteria:
-            # 1. Evaluated against linked database screening cases (is_case_linked_assessment == True)
-            # 2. Not run in educational simulation mode
-            # 3. Not backed by synthetic sandbox records
-            # 4. If residual risk was required (e.g. single carrier + negative partner), valid non-synthetic clinician provenance is verified
-            # 5. Assessment status must NOT be INSUFFICIENT_DATA and risk_estimate must not be None
-            if resp.assessment_status == AssessmentStatus.INSUFFICIENT_DATA or resp.risk_estimate is None:
+            resp.is_synthetic_sandbox = False
+
+            # Genuinely authoritative clinical record evaluation:
+            # 1. Non-synthetic screening cases (neither starts with 'SYN-')
+            # 2. Both findings reviewed by clinician (both_reviewed == True)
+            # 3. Not running in simulation mode
+            # 4. Valid non-synthetic clinician provenance verified if residual risk was required
+            # 5. Status is not INSUFFICIENT_DATA and risk_estimate is not None
+            if has_synthetic_case:
+                # Screening findings from explicitly identified synthetic demo cases cannot be labelled authoritative
+                resp.is_authoritative_clinical_record = False
+                resp.disclaimer = (
+                    "Educational demonstration using synthetic screening cases. "
+                    "Calculations reflect hypothetical simulation models and do not constitute an authoritative clinical patient record. "
+                    "Consult a certified genetic counsellor for clinical decision-making."
+                )
+            elif (
+                not both_reviewed
+                or resp.assessment_status == AssessmentStatus.INSUFFICIENT_DATA
+                or resp.risk_estimate is None
+            ):
                 resp.is_authoritative_clinical_record = False
             elif is_single_carrier_and_neg and not final_provenance_confirmed:
                 resp.is_authoritative_clinical_record = False
             else:
                 resp.is_authoritative_clinical_record = True
+                resp.disclaimer = (
+                    "Authoritative clinical risk assessment evaluated against clinician-reviewed patient screening records "
+                    "and verified laboratory provenance. Pre-conception genetic counselling is recommended."
+                )
 
         return resp
 
