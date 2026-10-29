@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.abspath("."))
 
 from app.core.config import settings
 from app.db.base import Base
+import app.models  # noqa: F401
 
 # Alembic Config object
 config = context.config

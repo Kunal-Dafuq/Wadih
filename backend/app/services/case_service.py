@@ -18,6 +18,7 @@ class CaseService:
         db: Session, user: User, skip: int = 0, limit: int = 20
     ) -> List[ScreeningCaseListItem]:
         """Retrieve synthetic screening cases owned by the authenticated participant."""
+        is_demo = getattr(user, "is_demo_session", False)
         if user.role == UserRole.COUNSELLOR:
             # Genetic counsellor can view cases linked to active referrals assigned to them
             assigned_case_ids = (
@@ -25,22 +26,16 @@ class CaseService:
                 .filter(ReferralTask.assigned_counsellor_id == user.id)
                 .subquery()
             )
-            cases = (
-                db.query(ScreeningCase)
-                .filter(ScreeningCase.id.in_(assigned_case_ids))
-                .offset(skip)
-                .limit(limit)
-                .all()
-            )
+            query = db.query(ScreeningCase).filter(ScreeningCase.id.in_(assigned_case_ids))
         else:
             # Participant can ONLY view their own cases
-            cases = (
-                db.query(ScreeningCase)
-                .filter(ScreeningCase.owner_user_id == user.id)
-                .offset(skip)
-                .limit(limit)
-                .all()
-            )
+            query = db.query(ScreeningCase).filter(ScreeningCase.owner_user_id == user.id)
+
+        # Demo sessions strictly view synthetic demonstration cases
+        if is_demo:
+            query = query.filter(ScreeningCase.synthetic_case_code.like("SYN-%"))
+
+        cases = query.offset(skip).limit(limit).all()
 
         items = []
         for c in cases:
@@ -66,6 +61,11 @@ class CaseService:
         if not case:
             raise NotFoundException("Screening case not found.")
 
+        # Demo session isolation: Demo sessions are strictly barred from non-synthetic cases
+        if getattr(user, "is_demo_session", False):
+            if not (case.synthetic_case_code and case.synthetic_case_code.startswith("SYN-")):
+                raise NotFoundException("Screening case not found.")
+
         # Check access permission
         is_owner = case.owner_user_id == user.id
         is_assigned_counsellor = False
@@ -80,8 +80,42 @@ class CaseService:
                 is not None
             )
 
-        # Cross-account sharing is dependent on Niharika's consent engine; deny access without revealing details
+        # Cross-account sharing is governed by Niharika's consent engine
+        has_full_report_consent = False
         if not is_owner and not is_assigned_counsellor:
+            from datetime import datetime, timezone
+            from app.models.consent import ConsentGrant, ConsentStatus, ConsentScope
+            from app.services.audit_service import AuditService
+
+            grant = (
+                db.query(ConsentGrant)
+                .filter(
+                    ConsentGrant.granter_user_id == case.owner_user_id,
+                    ConsentGrant.grantee_user_id == user.id,
+                    ConsentGrant.status == ConsentStatus.GRANTED.value,
+                    ConsentGrant.scope == ConsentScope.FULL_REPORT.value,
+                    ConsentGrant.revoked_at.is_(None),
+                )
+                .first()
+            )
+            if grant:
+                now = datetime.now(timezone.utc)
+                exp = grant.expires_at
+                if exp and exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if not exp or exp >= now:
+                    has_full_report_consent = True
+                    AuditService.log_event(
+                        db=db,
+                        action="SENSITIVE_RESULT_ACCESSED",
+                        resource_type="screening_case",
+                        resource_id=str(case.id),
+                        actor_user_id=user.id,
+                        outcome="SUCCESS",
+                        details={"scope": "full_report", "access_type": "consented_case_detail"},
+                    )
+
+        if not is_owner and not is_assigned_counsellor and not has_full_report_consent:
             raise NotFoundException("Screening case not found.")
 
         findings_resp = [

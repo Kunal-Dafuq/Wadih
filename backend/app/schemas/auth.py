@@ -7,6 +7,10 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=6, json_schema_extra={"example": "DemoPassword123!"})
 
 
+class DemoSessionRequest(BaseModel):
+    persona: str = Field(..., description="Synthetic demo persona ('patient_a', 'patient_b', 'counsellor')")
+
+
 class CurrentUserResponse(BaseModel):
     id: int
     email: str
@@ -15,6 +19,8 @@ class CurrentUserResponse(BaseModel):
     display_name: Optional[str] = None
     preferred_language: str = "en"
     literacy_mode: str = "standard"
+    is_demo_session: bool = False
+    token_scope: str = "standard"
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -22,6 +28,8 @@ class CurrentUserResponse(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    is_demo: bool = False
+    scope: str = "standard"
     user: CurrentUserResponse
 
 

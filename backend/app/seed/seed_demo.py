@@ -1,15 +1,20 @@
 """Database seeder for demo accounts, synthetic screening cases, and educational content."""
 
 from sqlalchemy.orm import Session
+from app.db.base import Base  # Ensure Base is initialized before models
 from app.db.session import SessionLocal
 from app.models.user import User, UserRole
 from app.models.participant import ParticipantProfile
 from app.models.screening_case import ScreeningCase, SyntheticFinding
 from app.models.education import EducationalContent
+import os
+import secrets
 from app.models.referral import ReferralTask, ReferralStatus, CounsellorNote
 from app.core.security import hash_password
+from app.core.config import settings
 
-DEMO_PASSWORD = "DemoPassword123!"
+# Test harness constant for local automated testing; in production, random hashes are generated
+DEMO_PASSWORD = os.getenv("TEST_SEED_PASSWORD") or "TestEnvSecret2026!"
 
 
 def seed_database(db: Session = None):
@@ -26,12 +31,17 @@ def seed_database(db: Session = None):
             return
 
         print("Seeding demo accounts...")
-        hashed_pwd = hash_password(DEMO_PASSWORD)
+        if settings.ENVIRONMENT == "production":
+            def _get_hash():
+                return hash_password(secrets.token_urlsafe(32))
+        else:
+            def _get_hash():
+                return hash_password(DEMO_PASSWORD)
 
         # 1. Patient A
         patient_a = User(
             email="patient.a@wadih.demo",
-            hashed_password=hashed_pwd,
+            hashed_password=_get_hash(),
             role=UserRole.PATIENT,
             is_active=True,
         )
@@ -49,7 +59,7 @@ def seed_database(db: Session = None):
         # 2. Patient B
         patient_b = User(
             email="patient.b@wadih.demo",
-            hashed_password=hashed_pwd,
+            hashed_password=_get_hash(),
             role=UserRole.PATIENT,
             is_active=True,
         )
@@ -67,7 +77,7 @@ def seed_database(db: Session = None):
         # 3. Genetic Counsellor
         counsellor = User(
             email="counsellor@wadih.demo",
-            hashed_password=hashed_pwd,
+            hashed_password=_get_hash(),
             role=UserRole.COUNSELLOR,
             is_active=True,
         )

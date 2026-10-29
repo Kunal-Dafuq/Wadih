@@ -26,6 +26,11 @@ class ReferralService:
         if not case or case.owner_user_id != user.id:
             raise NotFoundException("Screening case not found.")
 
+        # Demo session isolation: barred from non-synthetic cases
+        if getattr(user, "is_demo_session", False):
+            if not (case.synthetic_case_code and case.synthetic_case_code.startswith("SYN-")):
+                raise NotFoundException("Screening case not found.")
+
         # 2. Assign default demo genetic counsellor if one exists
         default_counsellor = (
             db.query(User).filter(User.role == UserRole.COUNSELLOR, User.is_active == True).first()
@@ -51,25 +56,22 @@ class ReferralService:
         db: Session, user: User, skip: int = 0, limit: int = 50
     ) -> List[ReferralTaskResponse]:
         """Retrieve simulated referrals owned by participant or assigned to counsellor."""
+        is_demo = getattr(user, "is_demo_session", False)
         if user.role == UserRole.COUNSELLOR:
-            referrals = (
+            query = (
                 db.query(ReferralTask)
                 .filter(ReferralTask.assigned_counsellor_id == user.id)
-                .order_by(ReferralTask.created_at.desc())
-                .offset(skip)
-                .limit(limit)
-                .all()
             )
         else:
-            referrals = (
+            query = (
                 db.query(ReferralTask)
                 .filter(ReferralTask.participant_user_id == user.id)
-                .order_by(ReferralTask.created_at.desc())
-                .offset(skip)
-                .limit(limit)
-                .all()
             )
 
+        if is_demo:
+            query = query.filter(ReferralTask.case.has(ScreeningCase.synthetic_case_code.like("SYN-%")))
+
+        referrals = query.order_by(ReferralTask.created_at.desc()).offset(skip).limit(limit).all()
         return [ReferralService._format_referral_response(r) for r in referrals]
 
     @staticmethod
@@ -80,6 +82,11 @@ class ReferralService:
         referral = db.query(ReferralTask).filter(ReferralTask.id == referral_id).first()
         if not referral:
             raise NotFoundException("Referral task not found.")
+
+        # Demo session isolation: barred from non-synthetic cases
+        if getattr(user, "is_demo_session", False):
+            if not (referral.case and referral.case.synthetic_case_code and referral.case.synthetic_case_code.startswith("SYN-")):
+                raise NotFoundException("Referral task not found.")
 
         is_owner = referral.participant_user_id == user.id
         is_assigned_counsellor = (
@@ -102,6 +109,11 @@ class ReferralService:
         referral = db.query(ReferralTask).filter(ReferralTask.id == referral_id).first()
         if not referral:
             raise NotFoundException("Referral task not found.")
+
+        # Demo session isolation: barred from non-synthetic cases
+        if getattr(user, "is_demo_session", False):
+            if not (referral.case and referral.case.synthetic_case_code and referral.case.synthetic_case_code.startswith("SYN-")):
+                raise NotFoundException("Referral task not found.")
 
         is_owner = referral.participant_user_id == user.id
         is_assigned_counsellor = (
@@ -139,6 +151,11 @@ class ReferralService:
         referral = db.query(ReferralTask).filter(ReferralTask.id == referral_id).first()
         if not referral:
             raise NotFoundException("Referral task not found.")
+
+        # Demo session isolation: barred from non-synthetic cases
+        if getattr(user, "is_demo_session", False):
+            if not (referral.case and referral.case.synthetic_case_code and referral.case.synthetic_case_code.startswith("SYN-")):
+                raise NotFoundException("Referral task not found.")
 
         if user.role != UserRole.COUNSELLOR or referral.assigned_counsellor_id != user.id:
             raise ForbiddenException("Only the assigned genetic counsellor may author clinical notes.")

@@ -1,5 +1,5 @@
-from typing import List, Union
-from pydantic import field_validator
+from typing import List, Union, Optional
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +12,16 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "sqlite:///./wadih_dev.db"
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def assemble_database_url(cls, v: str) -> str:
+        if isinstance(v, str):
+            if v.startswith("postgres://"):
+                return v.replace("postgres://", "postgresql+psycopg2://", 1)
+            elif v.startswith("postgresql://") and not v.startswith("postgresql+"):
+                return v.replace("postgresql://", "postgresql+psycopg2://", 1)
+        return v
+
     # Security
     SECRET_KEY: str = "development_secret_key_change_in_production"
     ALGORITHM: str = "HS256"
@@ -19,19 +29,39 @@ class Settings(BaseSettings):
 
     # CORS
     ALLOWED_ORIGINS: Union[List[str], str] = [
+        "https://frontend-five-psi-43.vercel.app",
         "http://localhost:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ]
+    # Restrict preview regex in production: Only applied when explicitly approved via environment
+    ALLOWED_ORIGIN_REGEX: Optional[str] = None
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
     def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
         if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",") if i.strip()]
+            origins = [i.strip() for i in v.split(",") if i.strip()]
         elif isinstance(v, list):
-            return v
-        return []
+            origins = list(v)
+        else:
+            origins = []
+
+        # Ensure production Vercel frontend domain is always allowed
+        default_domain = "https://frontend-five-psi-43.vercel.app"
+        if default_domain not in origins:
+            origins.append(default_domain)
+        return origins
+
+    @model_validator(mode="after")
+    def enforce_environment_cors_isolation(self) -> "Settings":
+        """Strictly isolate production CORS: eliminate localhost and 127.0.0.1 in production."""
+        if self.ENVIRONMENT.lower() == "production":
+            self.ALLOWED_ORIGINS = [
+                origin for origin in self.ALLOWED_ORIGINS
+                if not any(local in origin for local in ["localhost", "127.0.0.1", "0.0.0.0"])
+            ]
+        return self
 
     model_config = SettingsConfigDict(
         env_file=".env",

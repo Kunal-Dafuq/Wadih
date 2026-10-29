@@ -25,13 +25,14 @@ def create_application() -> FastAPI:
         openapi_url="/openapi.json",
     )
 
-    # CORS configuration
+    # CORS configuration - restricted to exact production origin and explicitly approved preview regex
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.ALLOWED_ORIGINS,
+        allow_origin_regex=settings.ALLOWED_ORIGIN_REGEX,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-Request-ID"],
     )
 
     # Request ID middleware

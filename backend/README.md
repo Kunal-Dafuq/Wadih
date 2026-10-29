@@ -43,16 +43,28 @@ The Wadih engineering team operates under strict modular responsibility isolatio
 - Standardized API error envelopes conforming to the unified error contract.
 - Comprehensive automated test suite with pytest.
 
-### Teammate Interfaces & Remaining Dependencies
-- **Niharika (`niharika/advanced-backend`)**:
-  - Deterministic genetic risk calculation engine (cross-carrier matching).
-  - Granular recipient/resource/scope consent grant management.
-  - Revocation enforcement logic.
-  - Security audit log persistence.
-  - Clinical escalation review policies.
-  *Note: Endpoints requiring partner-sharing or clinical escalation deny unauthorized access until Niharika's policy engine is integrated.*
-- **Saiesha (`saiesha/frontend`)**:
-  - React/TypeScript frontend consuming the `/api/v1` endpoints documented below.
+### Niharika's Assigned Scope (Implemented, Audited & Hardened)
+- Deterministic genetic risk engine for Autosomal Recessive conditions:
+  - Dual confirmed carriers: 25% affected, 50% carrier, 25% non-carrier per pregnancy.
+  - Single carrier + negative partner: Server-controlled clinical provenance modeling (`P(affected) = r × 1/4`).
+  - Zero Client-Side Provenance Trust: Client booleans or free-text source names cannot self-certify clinical provenance; residual risk must be verified against an authoritative `ClinicalResidualRiskRecord` signed off by an authorized clinician.
+  - Case-Level & Couple-Referral Authorization: Ingestion (`/api/v1/clinical/provenance`) requires counsellors to be assigned to the case directly or hold an active referral for a partner participant who has an active `ConsentGrant` with the case owner. Unassigned counsellors fail closed with 403 Forbidden.
+  - Strict clinical safety guardrails: Suppresses numerical probabilities (`INSUFFICIENT_DATA` / `REVIEW_REQUIRED` with `risk_estimate=null`) when residual risk `r` or provenance is unverified. Rejects zero-risk claims for negative screening panels (`EDUCATIONAL_RESULT` with `risk_estimate=null`).
+  - Clinician-reviewed and sufficient-findings validation gates.
+  - Automatic escalation triggers for VUS, unreviewed data, and affected phenotypes.
+- Granular consent management & partner-sharing lifecycle:
+  - Scopes: `carrier_status_only` (field-level redaction), `summary_only`, `full_report`.
+  - Transactionally atomic consent grant, approve, and revoke operations with immediate access denial upon revocation or expiration.
+  - Direct case details (`/api/v1/cases/{case_id}`) guarded by IDOR checks, permitting cross-account access only under explicit active `full_report` consent.
+- Least-privilege security audit logging & immutability:
+  - Automatic credential and genomic sequence sanitization (raw variant strings, passwords, tokens redacted).
+  - Role-based scoping: Counsellors restricted strictly to assigned cases, referrals, or their own actions. Unrelated cases or general account actions performed by assigned participants are strictly filtered out. Patients forbidden (403); Admins retain full audit visibility.
+  - Immutability: Application & ORM layer strictly prohibits updates and deletions via SQLAlchemy mapper listeners and SessionEvents.do_orm_execute bulk guards; zero modification API routes exposed. (Physical database immutability against direct SQL superusers requires database-level privilege revocation or cloud WORM sinks).
+  - Atomic transaction commits ensuring business state changes and audit records persist or roll back together.
+
+### Saiesha's Frontend Interfaces
+- Saiesha (`saiesha/frontend`):
+  - React/TypeScript frontend consuming the `/api/v1` endpoints documented in `docs/API_CONTRACT_NIHARIKA.md`.
 
 ---
 
@@ -100,6 +112,20 @@ Supported error codes:
 | `GET` | `/api/v1/referrals/{referral_id}` | Yes | Referral details and counsellor notes |
 | `PATCH` | `/api/v1/referrals/{referral_id}/status` | Yes | Update status (PENDING, SCHEDULED, COMPLETED, CANCELLED) |
 | `POST` | `/api/v1/referrals/{referral_id}/notes` | Yes (Counsellor) | Author clinical/counselling session note |
+| `POST` | `/api/v1/risk/assess` | Yes | Calculate deterministic Mendelian recurrence risk |
+| `POST` | `/api/v1/risk/cases/{case_id}/assess` | Yes | Secure risk calculation via POST body (prevents log leakage; requires server provenance) |
+| `GET` | `/api/v1/risk/cases/{case_id}` | Yes | Legacy risk calculation from stored case (deprecated) |
+| `POST` | `/api/v1/clinical/provenance` | Yes (Counsellor/Admin) | Record authoritative clinician-reviewed residual-risk provenance |
+| `POST` | `/api/v1/consents` | Yes | Create granular consent grant (carrier_status_only, summary_only, full_report) |
+| `GET` | `/api/v1/consents` | Yes | List active and historical consent grants for user |
+| `GET` | `/api/v1/consents/{consent_id}` | Yes | Consent grant detail (granter/grantee restricted) |
+| `POST` | `/api/v1/consents/{consent_id}/approve` | Yes | Explicitly approve pending consent request (granter only) |
+| `POST` | `/api/v1/consents/{consent_id}/revoke` | Yes | Immediately revoke consent grant |
+| `POST` | `/api/v1/sharing/requests` | Yes | Create partner sharing invitation request (PENDING) |
+| `GET` | `/api/v1/sharing/shared-cases/{case_id}` | Yes | Access shared findings strictly filtered by granted scope |
+| `GET` | `/api/v1/audit/events` | Yes (Admin/Counsellor) | Inspect immutable security audit events (sanitized) |
+| `POST` | `/api/v1/counselling/escalations` | Yes | Clinically escalate case to genetic counselling |
+| `GET` | `/api/v1/counselling/escalations/check/{case_id}` | Yes | Deterministic escalation trigger scanner for case findings |
 
 ---
 
