@@ -150,6 +150,21 @@ class ClinicalProvenanceService:
         if not case:
             raise NotFoundException("Target screening case not found.")
 
+        # Check if caller is operating under a synthetic demonstration session
+        is_demo = getattr(clinician, "is_demo_session", False)
+        if is_demo:
+            if not (case.synthetic_case_code and case.synthetic_case_code.startswith("SYN-")):
+                AuditService.log_event(
+                    db=db,
+                    action="UNAUTHORIZED_PROVENANCE_ATTEMPT",
+                    resource_type="clinical_provenance",
+                    resource_id=str(req.case_id),
+                    actor_user_id=clinician.id,
+                    outcome="DENIED",
+                    details={"reason": "Demo session attempted provenance on non-synthetic case"},
+                )
+                raise ForbiddenException("Demo sessions are strictly restricted to synthetic demonstration cases.")
+
         # Object-level authorization for COUNSELLOR role:
         # Counsellor must be explicitly assigned to manage this case or an authorized couple referral
         if clinician.role == UserRole.COUNSELLOR:
@@ -198,11 +213,15 @@ class ClinicalProvenanceService:
         for r in existing_records:
             r.is_active = False
 
+        source_ref = req.clinical_source_reference.strip()
+        if is_demo and not source_ref.startswith("[SYNTHETIC_DEMO_SANDBOX]"):
+            source_ref = f"[SYNTHETIC_DEMO_SANDBOX] {source_ref}"
+
         record = ClinicalResidualRiskRecord(
             case_id=req.case_id,
             condition_code=req.condition_code,
             residual_carrier_probability=req.residual_carrier_probability,
-            clinical_source_reference=req.clinical_source_reference.strip(),
+            clinical_source_reference=source_ref,
             reviewing_clinician_id=clinician.id,
             notes=req.notes,
             is_active=True,
@@ -223,7 +242,9 @@ class ClinicalProvenanceService:
                 "case_id": req.case_id,
                 "condition_code": req.condition_code,
                 "residual_carrier_probability": req.residual_carrier_probability,
-                "source": req.clinical_source_reference.strip(),
+                "source": source_ref,
+                "is_demo_session": is_demo,
+                "synthetic_sandbox": is_demo,
             },
             commit=False,
         )

@@ -40,6 +40,11 @@ class ConsentService:
         if grantee.id == granter.id:
             raise ValidationException("A user cannot issue a consent grant to themselves.")
 
+        # Demo session isolation: Demo sessions can only grant consent to synthetic demo accounts
+        if getattr(granter, "is_demo_session", False):
+            if not grantee.email.endswith("@wadih.demo"):
+                raise ForbiddenException("Demo sessions are strictly restricted to synthetic demonstration accounts.")
+
         # Validate case if specified
         if request_data.case_id:
             case = db.query(ScreeningCase).filter(ScreeningCase.id == request_data.case_id).first()
@@ -105,6 +110,11 @@ class ConsentService:
 
         if partner.id == requester.id:
             raise ValidationException("Cannot create a sharing request targeting yourself.")
+
+        # Demo session isolation: Demo sessions can only issue partner invitations to synthetic demo accounts
+        if getattr(requester, "is_demo_session", False):
+            if not request_data.partner_email.strip().lower().endswith("@wadih.demo"):
+                raise ForbiddenException("Demo sessions are strictly restricted to synthetic demonstration accounts.")
 
         # Case reference check
         if request_data.case_id:
@@ -233,6 +243,14 @@ class ConsentService:
         elif as_grantee:
             query = query.filter(ConsentGrant.grantee_user_id == user.id)
 
+        # Demo session isolation: Demo sessions strictly see consent grants between demo accounts
+        if getattr(user, "is_demo_session", False):
+            demo_user_ids = [u.id for u in db.query(User.id).filter(User.email.like("%@wadih.demo")).all()]
+            query = query.filter(
+                ConsentGrant.granter_user_id.in_(demo_user_ids),
+                ConsentGrant.grantee_user_id.in_(demo_user_ids),
+            )
+
         grants = query.order_by(ConsentGrant.created_at.desc()).all()
         return [ConsentService._format_consent_response(g) for g in grants]
 
@@ -245,6 +263,12 @@ class ConsentService:
 
         if grant.granter_user_id != user.id and grant.grantee_user_id != user.id and user.role != UserRole.ADMIN:
             raise NotFoundException("Consent grant not found.")
+
+        # Demo session isolation: Demo sessions cannot view consent records involving real accounts
+        if getattr(user, "is_demo_session", False):
+            demo_user_ids = {u.id for u in db.query(User.id).filter(User.email.like("%@wadih.demo")).all()}
+            if grant.granter_user_id not in demo_user_ids or grant.grantee_user_id not in demo_user_ids:
+                raise NotFoundException("Consent grant not found.")
 
         return ConsentService._format_consent_response(grant)
 

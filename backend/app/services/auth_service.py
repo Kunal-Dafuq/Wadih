@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Optional
 from sqlalchemy.orm import Session
 
@@ -45,14 +46,28 @@ class AuthService:
         return user
 
     @staticmethod
-    def create_token_for_user(user: User) -> TokenResponse:
-        """Generate JWT access token and user info payload."""
+    def create_token_for_user(
+        user: User,
+        is_demo: bool = False,
+        demo_persona: Optional[str] = None,
+    ) -> TokenResponse:
+        """Generate JWT access token and user info payload.
+
+        Demo sessions receive:
+        - 30-minute reduced token expiration.
+        - Explicit is_demo=True and scope='synthetic_demo' claims.
+        """
+        scope = "synthetic_demo" if is_demo else "standard"
         token_payload = {
             "sub": str(user.id),
             "email": user.email,
             "role": user.role.value if hasattr(user.role, "value") else str(user.role),
+            "is_demo": is_demo,
+            "scope": scope,
+            "demo_persona": demo_persona if is_demo else None,
         }
-        token = create_access_token(token_payload)
+        expires_delta = timedelta(minutes=30) if is_demo else None
+        token = create_access_token(token_payload, expires_delta=expires_delta)
 
         display_name = user.profile.display_name if user.profile else user.email.split("@")[0]
         pref_lang = user.profile.preferred_language if user.profile else "en"
@@ -66,11 +81,15 @@ class AuthService:
             display_name=display_name,
             preferred_language=pref_lang,
             literacy_mode=lit_mode,
+            is_demo_session=is_demo,
+            token_scope=scope,
         )
 
         return TokenResponse(
             access_token=token,
             token_type="bearer",
+            is_demo=is_demo,
+            scope=scope,
             user=user_resp,
         )
 

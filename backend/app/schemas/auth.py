@@ -19,6 +19,8 @@ class CurrentUserResponse(BaseModel):
     display_name: Optional[str] = None
     preferred_language: str = "en"
     literacy_mode: str = "standard"
+    is_demo_session: bool = False
+    token_scope: str = "standard"
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -26,6 +28,8 @@ class CurrentUserResponse(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    is_demo: bool = False
+    scope: str = "standard"
     user: CurrentUserResponse
 
 

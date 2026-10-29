@@ -58,4 +58,6 @@ def get_me(current_user: User = Depends(get_current_user)):
         display_name=display_name,
         preferred_language=pref_lang,
         literacy_mode=lit_mode,
+        is_demo_session=getattr(current_user, "is_demo_session", False),
+        token_scope=getattr(current_user, "token_scope", "standard"),
     )

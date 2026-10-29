@@ -81,6 +81,19 @@ class AuditService:
         limit: int = 50,
     ) -> AuditEventListResponse:
         """Retrieve audit events. Restricted to ADMIN and COUNSELLOR roles."""
+        if getattr(current_user, "is_demo_session", False):
+            # Record privileged access attempt by synthetic demo session
+            AuditService.log_event(
+                db=db,
+                action="DEMO_PRIVILEGED_ACCESS_ATTEMPT",
+                resource_type="audit_log",
+                resource_id="all",
+                actor_user_id=current_user.id,
+                outcome="DENIED",
+                details={"reason": "Synthetic demonstration session attempted audit log access"},
+            )
+            raise ForbiddenException("Audit log inspection is restricted to non-demo authenticated administrative users.")
+
         if current_user.role not in [UserRole.ADMIN, UserRole.COUNSELLOR]:
             # Record privileged access attempt violation
             AuditService.log_event(

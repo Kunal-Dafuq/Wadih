@@ -1,5 +1,5 @@
 from typing import List, Union, Optional
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,6 +52,16 @@ class Settings(BaseSettings):
         if default_domain not in origins:
             origins.append(default_domain)
         return origins
+
+    @model_validator(mode="after")
+    def enforce_environment_cors_isolation(self) -> "Settings":
+        """Strictly isolate production CORS: eliminate localhost and 127.0.0.1 in production."""
+        if self.ENVIRONMENT.lower() == "production":
+            self.ALLOWED_ORIGINS = [
+                origin for origin in self.ALLOWED_ORIGINS
+                if not any(local in origin for local in ["localhost", "127.0.0.1", "0.0.0.0"])
+            ]
+        return self
 
     model_config = SettingsConfigDict(
         env_file=".env",

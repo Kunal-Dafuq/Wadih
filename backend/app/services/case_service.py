@@ -18,6 +18,7 @@ class CaseService:
         db: Session, user: User, skip: int = 0, limit: int = 20
     ) -> List[ScreeningCaseListItem]:
         """Retrieve synthetic screening cases owned by the authenticated participant."""
+        is_demo = getattr(user, "is_demo_session", False)
         if user.role == UserRole.COUNSELLOR:
             # Genetic counsellor can view cases linked to active referrals assigned to them
             assigned_case_ids = (
@@ -25,22 +26,16 @@ class CaseService:
                 .filter(ReferralTask.assigned_counsellor_id == user.id)
                 .subquery()
             )
-            cases = (
-                db.query(ScreeningCase)
-                .filter(ScreeningCase.id.in_(assigned_case_ids))
-                .offset(skip)
-                .limit(limit)
-                .all()
-            )
+            query = db.query(ScreeningCase).filter(ScreeningCase.id.in_(assigned_case_ids))
         else:
             # Participant can ONLY view their own cases
-            cases = (
-                db.query(ScreeningCase)
-                .filter(ScreeningCase.owner_user_id == user.id)
-                .offset(skip)
-                .limit(limit)
-                .all()
-            )
+            query = db.query(ScreeningCase).filter(ScreeningCase.owner_user_id == user.id)
+
+        # Demo sessions strictly view synthetic demonstration cases
+        if is_demo:
+            query = query.filter(ScreeningCase.synthetic_case_code.like("SYN-%"))
+
+        cases = query.offset(skip).limit(limit).all()
 
         items = []
         for c in cases:
@@ -65,6 +60,11 @@ class CaseService:
         case = db.query(ScreeningCase).filter(ScreeningCase.id == case_id).first()
         if not case:
             raise NotFoundException("Screening case not found.")
+
+        # Demo session isolation: Demo sessions are strictly barred from non-synthetic cases
+        if getattr(user, "is_demo_session", False):
+            if not (case.synthetic_case_code and case.synthetic_case_code.startswith("SYN-")):
+                raise NotFoundException("Screening case not found.")
 
         # Check access permission
         is_owner = case.owner_user_id == user.id

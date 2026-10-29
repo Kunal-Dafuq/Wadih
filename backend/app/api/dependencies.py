@@ -45,6 +45,11 @@ def get_current_user(
     if not user.is_active:
         raise ForbiddenException("User account has been deactivated.")
 
+    # Attach session metadata for fine-grained authorization and synthetic demo boundaries
+    user.is_demo_session = bool(payload.get("is_demo", False))
+    user.token_scope = str(payload.get("scope", "synthetic_demo" if user.is_demo_session else "standard"))
+    user.demo_persona = payload.get("demo_persona")
+
     return user
 
 
