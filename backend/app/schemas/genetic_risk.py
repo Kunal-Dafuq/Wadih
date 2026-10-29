@@ -106,6 +106,10 @@ class CaseRiskAssessmentRequest(BaseModel):
         False,
         description="Explicit attestation that this residual risk value is derived from a clinician-reviewed laboratory test report",
     )
+    simulation_mode: bool = Field(
+        False,
+        description="Run as educational demonstration rather than authoritative clinical assessment",
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -138,6 +142,10 @@ class RiskAssessmentResponse(BaseModel):
     is_authoritative_clinical_record: bool = Field(
         False,
         description="Whether this assessment evaluates an authoritative, verified clinical screening record in the database",
+    )
+    is_synthetic_sandbox: bool = Field(
+        False,
+        description="Whether this assessment utilizes a synthetic demonstration sandbox record",
     )
     disclaimer: str = Field(
         default=(

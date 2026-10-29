@@ -296,6 +296,11 @@ class ConsentService:
             )
             raise NotFoundException("Screening case not found.")
 
+        # Demo session isolation: barred from non-synthetic cases
+        if getattr(caller, "is_demo_session", False):
+            if not (case.synthetic_case_code and case.synthetic_case_code.startswith("SYN-")):
+                raise NotFoundException("Screening case not found.")
+
         # If caller is the case owner, they can view their own summary
         if case.owner_user_id == caller.id:
             findings_summary = [

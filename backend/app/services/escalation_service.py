@@ -56,7 +56,28 @@ class EscalationService:
     ) -> List[str]:
         """Inspect synthetic findings in a case and identify clinical escalation triggers deterministically."""
         case = db.query(ScreeningCase).filter(ScreeningCase.id == case_id).first()
-        if not case or (case.owner_user_id != user.id and user.role != UserRole.COUNSELLOR):
+        if not case:
+            raise NotFoundException("Screening case not found.")
+
+        # Demo session isolation: barred from non-synthetic cases
+        if getattr(user, "is_demo_session", False):
+            if not (case.synthetic_case_code and case.synthetic_case_code.startswith("SYN-")):
+                raise NotFoundException("Screening case not found.")
+
+        is_owner = case.owner_user_id == user.id
+        is_assigned_counsellor = False
+        if user.role == UserRole.COUNSELLOR:
+            is_assigned_counsellor = (
+                db.query(ReferralTask)
+                .filter(
+                    ReferralTask.case_id == case_id,
+                    ReferralTask.assigned_counsellor_id == user.id,
+                )
+                .first()
+                is not None
+            )
+
+        if not is_owner and not is_assigned_counsellor:
             raise NotFoundException("Screening case not found.")
 
         reasons = []
@@ -87,6 +108,11 @@ class EscalationService:
         case = db.query(ScreeningCase).filter(ScreeningCase.id == request_data.case_id).first()
         if not case or case.owner_user_id != user.id:
             raise NotFoundException("Screening case not found.")
+
+        # Demo session isolation: barred from non-synthetic cases
+        if getattr(user, "is_demo_session", False):
+            if not (case.synthetic_case_code and case.synthetic_case_code.startswith("SYN-")):
+                raise NotFoundException("Screening case not found.")
 
         reason = request_data.trigger_reason.strip()
         if reason not in EscalationService.SUPPORTED_ESCALATION_REASONS:

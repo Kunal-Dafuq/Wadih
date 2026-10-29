@@ -225,6 +225,7 @@ class ClinicalProvenanceService:
             reviewing_clinician_id=clinician.id,
             notes=req.notes,
             is_active=True,
+            is_synthetic_sandbox=is_demo,
             reviewed_at=datetime.now(timezone.utc),
             created_at=datetime.now(timezone.utc),
         )
@@ -258,17 +259,28 @@ class ClinicalProvenanceService:
         db: Session,
         case_id: int,
         condition_code: str,
+        allow_synthetic_sandbox: bool = False,
     ) -> Optional[ClinicalResidualRiskRecord]:
-        """Retrieve an active, server-validated clinical residual risk record for a case and condition."""
-        record = (
+        """Retrieve an active, server-validated clinical residual risk record for a case and condition.
+
+        SECURITY BOUNDARY:
+        - When allow_synthetic_sandbox is False (default for all authoritative case assessments),
+          records created in synthetic demo sandbox sessions are strictly excluded.
+        - Synthetic sandbox records can ONLY be retrieved when allow_synthetic_sandbox is True
+          for dedicated educational simulation demonstrations.
+        """
+        query = (
             db.query(ClinicalResidualRiskRecord)
             .filter(
                 ClinicalResidualRiskRecord.case_id == case_id,
                 ClinicalResidualRiskRecord.condition_code == condition_code,
                 ClinicalResidualRiskRecord.is_active == True,  # noqa
             )
-            .first()
         )
+        if not allow_synthetic_sandbox:
+            query = query.filter(ClinicalResidualRiskRecord.is_synthetic_sandbox == False)  # noqa
+
+        record = query.first()
         if not record:
             return None
 

@@ -157,16 +157,34 @@ class RiskEngineService:
         partner_residual_carrier_probability: Optional[float] = None,
         residual_risk_source: Optional[str] = None,
         clinician_confirmed_provenance: bool = False,
+        simulation_mode: bool = False,
     ) -> RiskAssessmentResponse:
         """Assess risk directly from stored synthetic cases in the database, verifying ownership and consent."""
+        is_demo = getattr(user, "is_demo_session", False)
+
         # 1. Fetch Primary Case (Case 1)
         case_1 = db.query(ScreeningCase).filter(ScreeningCase.id == case_1_id).first()
         if not case_1:
             raise NotFoundException("Screening case not found.")
 
+        # Demo session isolation: barred from non-synthetic cases
+        if is_demo and not (case_1.synthetic_case_code and case_1.synthetic_case_code.startswith("SYN-")):
+            raise NotFoundException("Screening case not found.")
+
         # Object-level authorization for Case 1
         is_owner = case_1.owner_user_id == user.id
-        is_counsellor = user.role == UserRole.COUNSELLOR
+        is_counsellor = False
+        if user.role == UserRole.COUNSELLOR:
+            from app.models.referral import ReferralTask
+            is_counsellor = (
+                db.query(ReferralTask)
+                .filter(
+                    ReferralTask.case_id == case_1_id,
+                    ReferralTask.assigned_counsellor_id == user.id,
+                )
+                .first()
+                is not None
+            )
 
         if not is_owner and not is_counsellor:
             raise NotFoundException("Screening case not found.")
@@ -192,6 +210,9 @@ class RiskEngineService:
         if partner_case_id:
             case_2 = db.query(ScreeningCase).filter(ScreeningCase.id == partner_case_id).first()
             if not case_2:
+                raise NotFoundException("Partner screening case not found.")
+
+            if is_demo and not (case_2.synthetic_case_code and case_2.synthetic_case_code.startswith("SYN-")):
                 raise NotFoundException("Partner screening case not found.")
 
             # Strict Consent Check: Partner must have granted ACTIVE consent to user
@@ -247,6 +268,7 @@ class RiskEngineService:
             )
         )
 
+        is_sandbox_used: bool = False
         if is_single_carrier_and_neg:
             neg_case_id = (
                 partner_case_id
@@ -255,26 +277,37 @@ class RiskEngineService:
             )
             trusted_record = None
             if neg_case_id:
+                # If simulation_mode is explicitly requested, allow synthetic sandbox records for demo simulations
+                # In standard authoritative evaluation (simulation_mode=False), synthetic sandbox records are EXCLUDED
                 trusted_record = ClinicalProvenanceService.get_valid_provenance(
                     db=db,
                     case_id=neg_case_id,
                     condition_code=condition_code,
+                    allow_synthetic_sandbox=simulation_mode,
                 )
 
             if trusted_record:
-                # If client passed an explicit probability, verify it matches the authoritative clinician record
-                if (
-                    partner_residual_carrier_probability is not None
-                    and abs(partner_residual_carrier_probability - trusted_record.residual_carrier_probability) > 1e-5
-                ):
-                    # Inconsistent with authoritative clinician record -> fail safely
-                    final_residual_carrier_prob = partner_residual_carrier_probability
-                    final_provenance_confirmed = False
-                    final_residual_source = None
-                else:
+                if trusted_record.is_synthetic_sandbox:
+                    # Sandbox demonstration record:
+                    # CANNOT satisfy authoritative clinical provenance (only usable in simulation_mode)
+                    is_sandbox_used = True
                     final_residual_carrier_prob = trusted_record.residual_carrier_probability
-                    final_provenance_confirmed = True
+                    final_provenance_confirmed = True if simulation_mode else False
                     final_residual_source = trusted_record.clinical_source_reference
+                else:
+                    # If client passed an explicit probability, verify it matches the authoritative clinician record
+                    if (
+                        partner_residual_carrier_probability is not None
+                        and abs(partner_residual_carrier_probability - trusted_record.residual_carrier_probability) > 1e-5
+                    ):
+                        # Inconsistent with authoritative clinician record -> fail safely
+                        final_residual_carrier_prob = partner_residual_carrier_probability
+                        final_provenance_confirmed = False
+                        final_residual_source = None
+                    else:
+                        final_residual_carrier_prob = trusted_record.residual_carrier_probability
+                        final_provenance_confirmed = True
+                        final_residual_source = trusted_record.clinical_source_reference
             else:
                 # No trusted clinical record found in the database.
                 # Client-supplied numbers cannot self-certify clinical provenance.
@@ -302,7 +335,17 @@ class RiskEngineService:
             is_clinician_reviewed=both_reviewed,
         )
 
-        return RiskEngineService.assess_risk(req, is_educational_simulation=False)
+        is_simulation = simulation_mode or is_sandbox_used
+        resp = RiskEngineService.assess_risk(req, is_educational_simulation=is_simulation)
+        resp.is_synthetic_sandbox = is_sandbox_used
+        if is_sandbox_used:
+            resp.is_authoritative_clinical_record = False
+            resp.disclaimer = (
+                "Hypothetical educational demonstration using synthetic sandbox residual risk parameters. "
+                "This calculation does not satisfy authoritative clinical provenance. "
+                "Consult a certified genetic counsellor for personalized pre-conception guidance."
+            )
+        return resp
 
     @staticmethod
     def _map_finding_to_interpretation(finding: SyntheticFinding) -> ScreeningInterpretation:

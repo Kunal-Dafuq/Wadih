@@ -37,6 +37,7 @@ class ClinicalResidualRiskRecord(Base):
     )
     notes = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
+    is_synthetic_sandbox = Column(Boolean, default=False, nullable=False, server_default="0")
     reviewed_at = Column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

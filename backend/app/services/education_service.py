@@ -59,6 +59,11 @@ class EducationService:
         if not case:
             raise NotFoundException("Screening case not found.")
 
+        # Demo session isolation: barred from non-synthetic cases
+        if getattr(user, "is_demo_session", False):
+            if not (case.synthetic_case_code and case.synthetic_case_code.startswith("SYN-")):
+                raise NotFoundException("Screening case not found.")
+
         # Check access permission
         is_owner = case.owner_user_id == user.id
         is_assigned_counsellor = False

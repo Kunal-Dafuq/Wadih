@@ -78,6 +78,7 @@ def assess_risk_from_case_secure(
         partner_residual_carrier_probability=request.partner_residual_carrier_probability,
         residual_risk_source=request.residual_risk_source,
         clinician_confirmed_provenance=request.clinician_confirmed_provenance,
+        simulation_mode=request.simulation_mode,
     )
 
 

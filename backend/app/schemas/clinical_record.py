@@ -31,6 +31,7 @@ class ClinicalProvenanceResponse(BaseModel):
     reviewing_clinician_id: int
     notes: Optional[str] = None
     is_active: bool
+    is_synthetic_sandbox: bool = False
     reviewed_at: datetime
     created_at: datetime
 

@@ -117,9 +117,175 @@ def test_demo_counsellor_provenance_isolated_to_synthetic_sandbox(client: TestCl
     assert resp.status_code == 201
     data = resp.json()
 
-    # Must be branded with [SYNTHETIC_DEMO_SANDBOX]
+    # Must be branded with [SYNTHETIC_DEMO_SANDBOX] and explicit server-controlled flag
+    assert data["is_synthetic_sandbox"] is True
     assert data["clinical_source_reference"].startswith("[SYNTHETIC_DEMO_SANDBOX]")
     assert "LabCorp CF 97-Variant Carrier Panel" in data["clinical_source_reference"]
+
+
+def test_demo_provenance_cannot_authorize_authoritative_clinical_assessment(client: TestClient, db_session: Session):
+    """Verify demo-session provenance CANNOT authorize an authoritative clinical assessment.
+
+    CRITICAL SECURITY CHECK:
+    - Provenance created by a demo counsellor is marked is_synthetic_sandbox=True.
+    - Authoritative clinical assessment (simulation_mode=False) strictly ignores sandbox records.
+    - Resulting calculation suppresses numerical certainty and sets clinician_confirmed_provenance=False.
+    - When simulation_mode=True is requested, calculation proceeds with explicit simulation metadata.
+    """
+    seed_database(db_session)
+
+    # 1. Demo counsellor records provenance for negative partner (Case 2, HBB_BETA_THAL)
+    # First create an assigned referral task for Case 2
+    counsellor = db_session.query(User).filter(User.email == "counsellor@wadih.demo").first()
+    referral = ReferralTask(
+        case_id=2,
+        participant_user_id=2,
+        assigned_counsellor_id=counsellor.id,
+        reason_code="CARRIER_CONSULTATION",
+        status=ReferralStatus.PENDING,
+    )
+    db_session.add(referral)
+    db_session.commit()
+
+    resp_c = client.post("/api/v1/auth/demo-session", json={"persona": "counsellor"})
+    headers_c = {"Authorization": f"Bearer {resp_c.json()['access_token']}"}
+
+    prov_payload = {
+        "case_id": 2,
+        "condition_code": "HBB_BETA_THAL",
+        "residual_carrier_probability": 0.01,
+        "clinical_source_reference": "LabCorp Beta-Thal Panel",
+        "notes": "Reviewed in synthetic demonstration sandbox",
+    }
+    prov_resp = client.post("/api/v1/clinical/provenance", json=prov_payload, headers=headers_c)
+    assert prov_resp.status_code == 201
+    assert prov_resp.json()["is_synthetic_sandbox"] is True
+
+    # 2. Patient A calls authoritative case assessment (simulation_mode=False)
+    # With partner Case 2 linked under active consent
+    from app.models.consent import ConsentGrant, ConsentStatus, ConsentScope
+    grant = ConsentGrant(
+        granter_user_id=2,  # Patient B
+        grantee_user_id=1,  # Patient A
+        scope=ConsentScope.CARRIER_STATUS_ONLY.value,
+        status=ConsentStatus.GRANTED.value,
+        purpose="carrier_screening",
+    )
+    db_session.add(grant)
+    db_session.commit()
+
+    resp_a = client.post("/api/v1/auth/demo-session", json={"persona": "patient_a"})
+    headers_a = {"Authorization": f"Bearer {resp_a.json()['access_token']}"}
+
+    assess_payload_authoritative = {
+        "condition_code": "HBB_BETA_THAL",
+        "partner_case_id": 2,
+        "simulation_mode": False,
+    }
+    resp_auth = client.post("/api/v1/risk/cases/1/assess", json=assess_payload_authoritative, headers=headers_a)
+    assert resp_auth.status_code == 200
+    auth_data = resp_auth.json()
+
+    # Authoritative assessment MUST NOT accept synthetic sandbox record as clinical provenance!
+    # Provenance is unconfirmed -> numerical recurrence figure is suppressed and residual risk is unverified
+    assert auth_data["is_synthetic_sandbox"] is False
+    assert auth_data["is_educational_simulation"] is False
+    assert auth_data["is_authoritative_clinical_record"] is True
+    assert auth_data["risk_estimate"] is None
+    assert auth_data["assessment_status"] in ("INSUFFICIENT_DATA", "REVIEW_REQUIRED")
+
+    # 3. Dedicated educational demonstration path (simulation_mode=True)
+    assess_payload_demo = {
+        "condition_code": "HBB_BETA_THAL",
+        "partner_case_id": 2,
+        "simulation_mode": True,
+    }
+    resp_demo = client.post("/api/v1/risk/cases/1/assess", json=assess_payload_demo, headers=headers_a)
+    assert resp_demo.status_code == 200
+    demo_data = resp_demo.json()
+
+    # Demo path clearly separates simulation from authoritative records
+    assert demo_data["is_synthetic_sandbox"] is True
+    assert demo_data["is_educational_simulation"] is True
+    assert demo_data["is_authoritative_clinical_record"] is False
+    assert demo_data["risk_estimate"] is not None
+    assert demo_data["risk_estimate"]["residual_carrier_probability_used"] == 0.01
+    assert "Hypothetical educational demonstration using synthetic sandbox residual risk parameters" in demo_data["disclaimer"]
+
+
+def test_demo_patient_cannot_access_unauthorized_or_non_synthetic_records(client: TestClient, db_session: Session):
+    """Verify demo patient cannot access non-synthetic cases, referrals, explanations, or unconsented records."""
+    seed_database(db_session)
+
+    # Create a non-synthetic case
+    real_case = ScreeningCase(
+        owner_user_id=1,
+        synthetic_case_code="REAL-PATIENT-123",
+        status="COMPLETED",
+        screening_scope_label="Comprehensive Diagnostic",
+    )
+    db_session.add(real_case)
+    db_session.flush()
+
+    resp_a = client.post("/api/v1/auth/demo-session", json={"persona": "patient_a"})
+    headers_a = {"Authorization": f"Bearer {resp_a.json()['access_token']}"}
+
+    # 1. Read non-synthetic case -> 404
+    assert client.get(f"/api/v1/cases/{real_case.id}", headers=headers_a).status_code == 404
+
+    # 2. Read Patient B's case (Case 2) without consent -> 404
+    assert client.get("/api/v1/cases/2", headers=headers_a).status_code == 404
+
+    # 3. Read explanation for non-synthetic case -> 404
+    assert client.get(f"/api/v1/cases/{real_case.id}/explanation", headers=headers_a).status_code == 404
+
+    # 4. Create referral for non-synthetic case -> 404
+    referral_payload = {
+        "case_id": real_case.id,
+        "reason_code": "CARRIER_CONSULTATION",
+    }
+    assert client.post("/api/v1/referrals", json=referral_payload, headers=headers_a).status_code == 404
+
+    # 5. Create escalation for non-synthetic case -> 404
+    escalation_payload = {
+        "case_id": real_case.id,
+        "trigger_reason": "VARIANT_OF_UNCERTAIN_SIGNIFICANCE",
+    }
+    assert client.post("/api/v1/counselling/escalations", json=escalation_payload, headers=headers_a).status_code == 404
+
+
+def test_demo_counsellor_cannot_access_unassigned_cases_or_referrals(client: TestClient, db_session: Session):
+    """Verify demo counsellor cannot access or mutate referrals and cases not assigned to them."""
+    seed_database(db_session)
+
+    resp_c = client.post("/api/v1/auth/demo-session", json={"persona": "counsellor"})
+    headers_c = {"Authorization": f"Bearer {resp_c.json()['access_token']}"}
+
+    # Create an unassigned referral (assigned to another counsellor or None)
+    unassigned_referral = ReferralTask(
+        participant_user_id=1,
+        case_id=1,
+        assigned_counsellor_id=999,  # Unrelated counsellor ID
+        reason_code="EXTERNAL_CONSULT",
+        status=ReferralStatus.PENDING,
+    )
+    db_session.add(unassigned_referral)
+    db_session.commit()
+
+    # 1. Read unassigned referral by ID -> 404
+    assert client.get(f"/api/v1/referrals/{unassigned_referral.id}", headers=headers_c).status_code == 404
+
+    # 2. Update unassigned referral status -> 404
+    update_payload = {"status": "SCHEDULED"}
+    assert client.patch(f"/api/v1/referrals/{unassigned_referral.id}/status", json=update_payload, headers=headers_c).status_code == 404
+
+    # 3. Add note to unassigned referral -> 403 or 404
+    note_payload = {"note_text": "Unauthorized counsellor attempt"}
+    assert client.post(f"/api/v1/referrals/{unassigned_referral.id}/notes", json=note_payload, headers=headers_c).status_code in (403, 404)
+
+    # 4. Assess risk for unassigned case (Case 2 is assigned to no counsellor) -> 404
+    assess_payload = {"condition_code": "CFTR_CF"}
+    assert client.post("/api/v1/risk/cases/2/assess", json=assess_payload, headers=headers_c).status_code == 404
 
 
 def test_demo_counsellor_cannot_record_provenance_on_non_synthetic_case(client: TestClient, db_session: Session):
