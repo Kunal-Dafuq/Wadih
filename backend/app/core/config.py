@@ -32,16 +32,24 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://frontend-five-psi-43.vercel.app",
     ]
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
     def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
         if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",") if i.strip()]
+            origins = [i.strip() for i in v.split(",") if i.strip()]
         elif isinstance(v, list):
-            return v
-        return []
+            origins = list(v)
+        else:
+            origins = []
+
+        # Ensure production Vercel frontend domain is always allowed
+        default_domain = "https://frontend-five-psi-43.vercel.app"
+        if default_domain not in origins:
+            origins.append(default_domain)
+        return origins
 
     model_config = SettingsConfigDict(
         env_file=".env",
